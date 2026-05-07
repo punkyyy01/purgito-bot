@@ -62,9 +62,29 @@ CREATE TABLE IF NOT EXISTS corpus_messages (
     guild_id INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(guild_id, channel_id, content)
 );
 """
+
+async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
+    """Asegura unicidad del corpus por (guild, channel, content).
+
+    Para bases existentes, deduplica y luego crea un índice único (SQLite no permite
+    agregar constraints UNIQUE a una tabla existente sin recrearla).
+    """
+    # Eliminar duplicados existentes (conserva el id más chico por grupo)
+    await db.execute(
+        "DELETE FROM corpus_messages "
+        "WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM corpus_messages GROUP BY guild_id, channel_id, content"
+        ")"
+    )
+    # Índice único para garantizar unicidad a nivel DB también en tablas legacy
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS corpus_messages_unique_idx "
+        "ON corpus_messages(guild_id, channel_id, content)"
+    )
 
 async def init_db():
     """Inicializa la conexión global y crea las tablas."""
@@ -78,6 +98,7 @@ async def init_db():
     await _db.executescript(SCHEMA)
     await _migrate_legacy_persona(_db)
     await _migrate_add_param_columns(_db)
+    await _migrate_corpus_uniqueness(_db)
     await _db.commit()
 
 
@@ -438,20 +459,34 @@ async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> b
 
     db = await get_db()
     async with _db_lock:
-        await db.execute(
-            "INSERT INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
             (guild_id, channel_id, text),
         )
+        inserted = cursor.rowcount == 1
+        if cursor.rowcount == -1:
+            async with db.execute("SELECT changes()") as cur:
+                row = await cur.fetchone()
+                inserted = bool(row and row[0] == 1)
         await db.commit()
-    return True
+    return inserted
+
+
+async def count_corpus_messages(guild_id: int, channel_id: int) -> int:
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM corpus_messages WHERE guild_id=? AND channel_id=?",
+        (guild_id, channel_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return int(row[0] if row else 0)
 
 
 async def get_corpus_messages(guild_id: int, channel_id: int, limit: int = 500) -> list[str]:
     db = await get_db()
     async with db.execute(
-        "SELECT content FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY id DESC LIMIT ?",
+        "SELECT content FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY RANDOM() LIMIT ?",
         (guild_id, channel_id, limit),
     ) as cursor:
         rows = await cursor.fetchall()
-    # Dejar en orden cronológico (más antiguo -> más nuevo)
-    return [r[0] for r in reversed(rows)]
+    return [r[0] for r in rows]

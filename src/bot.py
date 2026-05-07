@@ -12,9 +12,9 @@ from db import (
     close_db,
     set_chat_mode,
     get_chat_settings,
-    top_usage,
     save_corpus_message,
     get_corpus_messages,
+    count_corpus_messages,
 )
 
 # Cargar variables de entorno
@@ -35,6 +35,20 @@ intents.message_content = ENABLE_MESSAGE_CONTENT
 _CONECTORES_FINALES = [
     " y", " o", " con", " pero", " de", " para", " a", " que", " entonces", " como"
 ]
+
+_markov_cache: dict[tuple[int, int], markovify.Text] = {}
+_message_counter: dict[tuple[int, int], int] = {}
+_corpus_insert_counter: dict[tuple[int, int], int] = {}
+
+
+def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
+    key = (guild_id, channel_id)
+    n = _corpus_insert_counter.get(key, 0) + 1
+    if n >= 50:
+        _corpus_insert_counter[key] = 0
+        _markov_cache.pop(key, None)
+    else:
+        _corpus_insert_counter[key] = n
 
 # 1. BOT CUSTOM PARA CIERRE LIMPIO DE BASE DE DATOS
 class MyCustomBot(commands.Bot):
@@ -117,15 +131,23 @@ def sanitize_message_for_chat(content: str, bot_user_id: int | None) -> str:
 
 
 async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text | None:
+    key = (guild_id, channel_id)
+    cached = _markov_cache.get(key)
+    if cached is not None:
+        return cached
+
     corpus = await get_corpus_messages(guild_id, channel_id, limit=500)
     if len(corpus) < 50:
         return None
 
     text = "\n".join(corpus)
     try:
-        return markovify.Text(text)
+        model = markovify.Text(text, state_size=2, well_formed=False)
     except Exception:
         return None
+
+    _markov_cache[key] = model
+    return model
 
 
 async def generate_markov_reply(guild_id: int, channel_id: int) -> str | None:
@@ -134,7 +156,7 @@ async def generate_markov_reply(guild_id: int, channel_id: int) -> str | None:
         return None
 
     try:
-        sentence = model.make_sentence(tries=10)
+        sentence = model.make_short_sentence(max_chars=200, tries=20)
     except Exception:
         sentence = None
 
@@ -194,8 +216,18 @@ async def on_message(message: discord.Message):
             message.content or "",
             bot.user.id if bot.user else None,
         )
+        inserted = False
         if len(clean_for_corpus.split()) > 3:
-            await save_corpus_message(message.guild.id, message.channel.id, clean_for_corpus)
+            inserted = await save_corpus_message(message.guild.id, message.channel.id, clean_for_corpus)
+
+        auto_generate = False
+        if inserted:
+            _note_corpus_insert(message.guild.id, message.channel.id)
+            key = (message.guild.id, message.channel.id)
+            _message_counter[key] = _message_counter.get(key, 0) + 1
+            if _message_counter[key] >= 15:
+                _message_counter[key] = 0
+                auto_generate = True
 
     # 2. Verificar si el bot fue mencionado o si le respondieron a él directamente
     mention_bot = bool(bot.user and bot.user.id in (message.raw_mentions or []))
@@ -206,6 +238,15 @@ async def on_message(message: discord.Message):
             reply_to_bot = ref_msg.author.id == bot.user.id
 
     if not (mention_bot or reply_to_bot):
+        if message.guild and auto_generate:
+            try:
+                reply = await generate_markov_reply(message.guild.id, message.channel.id)
+                if reply is not None:
+                    reply = post_process_reply(reply)
+                    for chunk in chunk_message(reply):
+                        await message.channel.send(chunk)
+            except Exception:
+                pass
         return
 
     if not message.guild:
@@ -252,8 +293,11 @@ async def refeed_slash(interaction: discord.Interaction):
         if msg.author.bot:
             continue
         text = sanitize_message_for_chat(msg.content or "", bot_user_id)
+        if len(text.split()) <= 3:
+            continue
         if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
             saved += 1
+            _note_corpus_insert(interaction.guild.id, msg.channel.id)
 
     await interaction.followup.send(f"✅ Guardados {saved} mensajes en el corpus.")
 
@@ -302,20 +346,17 @@ async def chatmode_slash(interaction: discord.Interaction, estado: app_commands.
     await interaction.response.send_message(msg)
 
 
-@bot.tree.command(name="stats", description="Muestra las estadísticas de uso de los comandos.")
-async def stats_slash(interaction: discord.Interaction):
-    usage = await top_usage(5)
-    if not usage:
-        await interaction.response.send_message("Aún no hay datos de uso.", ephemeral=True)
+@bot.tree.command(name="corpus_info", description="Muestra cuántos mensajes hay en el corpus del canal actual.")
+async def corpus_info_slash(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
 
-    embed = discord.Embed(title="📊 Estadísticas de Uso", color=0x00ff00)
-    descripcion = ""
-    for cmd, count in usage:
-        descripcion += f"**!{cmd}**: {count} veces\n"
-    
-    embed.description = descripcion
-    await interaction.response.send_message(embed=embed)
+    count = await count_corpus_messages(interaction.guild.id, interaction.channel.id)
+    msg = f"📊 El corpus de este canal tiene {count} mensajes."
+    if count < 50:
+        msg += "\n⚠️ Necesita al menos 50 mensajes para generar bien."
+    await interaction.response.send_message(msg)
 
 
 if __name__ == "__main__":
