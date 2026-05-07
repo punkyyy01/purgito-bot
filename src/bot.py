@@ -46,6 +46,15 @@ _corpus_insert_counter: dict[tuple[int, int], int] = {}
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com)\S*', re.IGNORECASE)
 
+ALLOWED_ROLE_IDS = {1434103563746803801, 1434103563700666401}
+
+
+def has_allowed_role(interaction: discord.Interaction) -> bool:
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return False
+    return any(role.id in ALLOWED_ROLE_IDS for role in member.roles)
+
 
 def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
     key = (guild_id, channel_id)
@@ -342,6 +351,10 @@ async def refeed_slash(interaction: discord.Interaction):
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
 
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+
     await interaction.response.defer(thinking=True)
 
     channel = interaction.channel
@@ -385,6 +398,10 @@ async def refeed_slash(interaction: discord.Interaction):
 async def refeed_all_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
     await interaction.response.defer(thinking=True)
