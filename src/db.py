@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS corpus_messages (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(guild_id, channel_id, content)
 );
+
+CREATE TABLE IF NOT EXISTS corpus_gifs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(guild_id, url)
+);
 """
 
 async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
@@ -490,3 +498,43 @@ async def get_corpus_messages(guild_id: int, limit: int = 500) -> list[str]:
     ) as cursor:
         rows = await cursor.fetchall()
     return [r[0] for r in rows]
+
+
+async def wipe_corpus(guild_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "DELETE FROM corpus_messages WHERE guild_id=?",
+            (guild_id,),
+        )
+        await db.commit()
+
+
+async def save_gif_url(guild_id: int, url: str) -> bool:
+    u = (url or "").strip()
+    if not u:
+        return False
+
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO corpus_gifs (guild_id, url) VALUES (?, ?)",
+            (guild_id, u),
+        )
+        inserted = cursor.rowcount == 1
+        if cursor.rowcount == -1:
+            async with db.execute("SELECT changes()") as cur:
+                row = await cur.fetchone()
+                inserted = bool(row and row[0] == 1)
+        await db.commit()
+    return inserted
+
+
+async def get_random_gif(guild_id: int) -> str | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT url FROM corpus_gifs WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None

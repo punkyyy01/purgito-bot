@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import random
 import markovify
 
 import discord
@@ -15,6 +16,9 @@ from db import (
     save_corpus_message,
     get_corpus_messages,
     count_corpus_messages,
+    wipe_corpus,
+    save_gif_url,
+    get_random_gif,
 )
 
 # Cargar variables de entorno
@@ -39,6 +43,8 @@ _CONECTORES_FINALES = [
 _markov_cache: dict[tuple[int, int], markovify.Text] = {}
 _message_counter: dict[tuple[int, int], int] = {}
 _corpus_insert_counter: dict[tuple[int, int], int] = {}
+
+_GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com)\S*', re.IGNORECASE)
 
 
 def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
@@ -130,6 +136,43 @@ def sanitize_message_for_chat(content: str, bot_user_id: int | None) -> str:
     return text.strip()
 
 
+_ANSI_ESCAPE_RE = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
+_ANSI_BRACKET_RE = re.compile(r'\]\d*;[^\]]*')
+_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_DISCORD_MENTIONS_RE = re.compile(r'<@!?\d+>|<#\d+>|<@&\d+>')
+
+
+def clean_for_corpus(text: str) -> str | None:
+    t = (text or "").strip()
+    if not t:
+        return None
+
+    # Eliminar secuencias ANSI y basura típica de logs
+    t = _ANSI_ESCAPE_RE.sub(" ", t)
+    t = _ANSI_BRACKET_RE.sub(" ", t)
+    t = t.replace("[0m", " ").replace("][", " ")
+
+    # Eliminar URLs y menciones Discord
+    t = _URL_RE.sub(" ", t)
+    t = _DISCORD_MENTIONS_RE.sub(" ", t)
+
+    # Eliminar líneas que sean solo números/símbolos/caracteres especiales
+    kept_lines: list[str] = []
+    for line in t.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if not any(ch.isalpha() for ch in s):
+            continue
+        kept_lines.append(s)
+
+    t = " ".join(kept_lines)
+    t = re.sub(r"\s+", " ", t).strip()
+    if len(t.split()) < 4:
+        return None
+    return t
+
+
 async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text | None:
     key = (guild_id, channel_id)
     cached = _markov_cache.get(key)
@@ -212,13 +255,18 @@ async def on_message(message: discord.Message):
         return
 
     if message.guild:
-        clean_for_corpus = sanitize_message_for_chat(
-            message.content or "",
-            bot.user.id if bot.user else None,
-        )
+        # Guardar GIFs (tenor/giphy) si aparecen en el mensaje
+        if message.content:
+            for m in _GIF_RE.finditer(message.content):
+                try:
+                    await save_gif_url(message.guild.id, m.group(0))
+                except Exception:
+                    pass
+
+        cleaned = clean_for_corpus(message.content or "")
         inserted = False
-        if len(clean_for_corpus.split()) > 3:
-            inserted = await save_corpus_message(message.guild.id, message.channel.id, clean_for_corpus)
+        if cleaned is not None:
+            inserted = await save_corpus_message(message.guild.id, message.channel.id, cleaned)
 
         auto_generate = False
         if inserted:
@@ -228,6 +276,15 @@ async def on_message(message: discord.Message):
             if _message_counter[key] >= 15:
                 _message_counter[key] = 0
                 auto_generate = True
+
+            # Reacción aleatoria con emoji custom del server
+            if random.random() < 0.05:
+                try:
+                    emojis = list(getattr(message.guild, "emojis", []) or [])
+                    if emojis:
+                        await message.add_reaction(random.choice(emojis))
+                except Exception:
+                    pass
 
     # 2. Verificar si el bot fue mencionado o si le respondieron a él directamente
     mention_bot = bool(bot.user and bot.user.id in (message.raw_mentions or []))
@@ -240,6 +297,11 @@ async def on_message(message: discord.Message):
     if not (mention_bot or reply_to_bot):
         if message.guild and auto_generate:
             try:
+                if random.random() < 0.15:
+                    gif_url = await get_random_gif(message.guild.id)
+                    if gif_url:
+                        await message.channel.send(gif_url)
+                        return
                 reply = await generate_markov_reply(message.guild.id, message.channel.id)
                 if reply is not None:
                     reply = post_process_reply(reply)
@@ -288,7 +350,6 @@ async def refeed_slash(interaction: discord.Interaction):
         return
 
     saved = 0
-    bot_user_id = bot.user.id if bot.user else None
 
     last_msg_id: int | None = None
     while True:
@@ -300,10 +361,18 @@ async def refeed_slash(interaction: discord.Interaction):
         for msg in batch:
             if msg.author.bot:
                 continue
-            text = sanitize_message_for_chat(msg.content or "", bot_user_id)
-            if len(text.split()) <= 3:
+
+            if msg.content:
+                for m in _GIF_RE.finditer(msg.content):
+                    try:
+                        await save_gif_url(interaction.guild.id, m.group(0))
+                    except Exception:
+                        pass
+
+            cleaned = clean_for_corpus(msg.content or "")
+            if cleaned is None:
                 continue
-            if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
+            if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
                 saved += 1
                 _note_corpus_insert(interaction.guild.id, msg.channel.id)
 
@@ -328,7 +397,6 @@ async def refeed_all_slash(interaction: discord.Interaction):
         return
 
     total_saved = 0
-    bot_user_id = bot.user.id if bot.user else None
 
     for channel in interaction.guild.text_channels:
         perms = channel.permissions_for(me)
@@ -346,10 +414,18 @@ async def refeed_all_slash(interaction: discord.Interaction):
             for msg in batch:
                 if msg.author.bot:
                     continue
-                text = sanitize_message_for_chat(msg.content or "", bot_user_id)
-                if len(text.split()) <= 3:
+
+                if msg.content:
+                    for m in _GIF_RE.finditer(msg.content):
+                        try:
+                            await save_gif_url(interaction.guild.id, m.group(0))
+                        except Exception:
+                            pass
+
+                cleaned = clean_for_corpus(msg.content or "")
+                if cleaned is None:
                     continue
-                if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
+                if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
                     saved += 1
                     _note_corpus_insert(interaction.guild.id, msg.channel.id)
 
@@ -403,6 +479,24 @@ async def chatmode_slash(interaction: discord.Interaction, estado: app_commands.
         msg = "❌ Auto-reply desactivado."
 
     await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="corpus_wipe", description="Borra el corpus del servidor (mensajes) y reinicia el cache Markov.")
+async def corpus_wipe_slash(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+
+    await wipe_corpus(interaction.guild.id)
+
+    # Limpiar caches por guild
+    gid = interaction.guild.id
+    for key in [k for k in _markov_cache.keys() if k[0] == gid]:
+        _markov_cache.pop(key, None)
+    for key in [k for k in _corpus_insert_counter.keys() if k[0] == gid]:
+        _corpus_insert_counter.pop(key, None)
+
+    await interaction.response.send_message("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
 
 
 @bot.tree.command(name="corpus_info", description="Muestra cuántos mensajes hay en el corpus del canal actual.")
