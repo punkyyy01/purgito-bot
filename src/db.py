@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS settings (
     chat_mode_enabled INTEGER NOT NULL DEFAULT 1,
     chat_channel_id INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS corpus_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 async def init_db():
@@ -419,3 +427,31 @@ async def get_chat_settings(guild_id: int):
         if not row:
             return {"enabled": True, "channel_id": None}
         return {"enabled": bool(row[0]), "channel_id": row[1]}
+
+
+async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    if len(text.split()) <= 3:
+        return False
+
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "INSERT INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
+            (guild_id, channel_id, text),
+        )
+        await db.commit()
+    return True
+
+
+async def get_corpus_messages(guild_id: int, channel_id: int, limit: int = 500) -> list[str]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT content FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY id DESC LIMIT ?",
+        (guild_id, channel_id, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    # Dejar en orden cronológico (más antiguo -> más nuevo)
+    return [r[0] for r in reversed(rows)]
