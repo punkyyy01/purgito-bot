@@ -156,7 +156,7 @@ async def generate_markov_reply(guild_id: int, channel_id: int) -> str | None:
         return None
 
     try:
-        sentence = model.make_short_sentence(max_chars=120, tries=50)
+        sentence = model.make_short_sentence(max_chars=60, tries=50)
     except Exception:
         sentence = None
 
