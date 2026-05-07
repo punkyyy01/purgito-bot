@@ -482,11 +482,11 @@ async def count_corpus_messages(guild_id: int, channel_id: int) -> int:
     return int(row[0] if row else 0)
 
 
-async def get_corpus_messages(guild_id: int, channel_id: int, limit: int = 500) -> list[str]:
+async def get_corpus_messages(guild_id: int, limit: int = 500) -> list[str]:
     db = await get_db()
     async with db.execute(
-        "SELECT content FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY RANDOM() LIMIT ?",
-        (guild_id, channel_id, limit),
+        "SELECT content FROM corpus_messages WHERE guild_id=? ORDER BY RANDOM() LIMIT ?",
+        (guild_id, limit),
     ) as cursor:
         rows = await cursor.fetchall()
     return [r[0] for r in rows]

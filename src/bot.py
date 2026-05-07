@@ -136,7 +136,7 @@ async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text |
     if cached is not None:
         return cached
 
-    corpus = await get_corpus_messages(guild_id, channel_id, limit=500)
+    corpus = await get_corpus_messages(guild_id, limit=500)
     if len(corpus) < 50:
         return None
 
