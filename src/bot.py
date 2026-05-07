@@ -142,7 +142,7 @@ async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text |
 
     text = "\n".join(corpus)
     try:
-        model = markovify.Text(text, state_size=2, well_formed=False)
+        model = markovify.Text(text, state_size=1, well_formed=False)
     except Exception:
         return None
 
@@ -156,7 +156,7 @@ async def generate_markov_reply(guild_id: int, channel_id: int) -> str | None:
         return None
 
     try:
-        sentence = model.make_short_sentence(max_chars=200, tries=20)
+        sentence = model.make_short_sentence(max_chars=120, tries=50)
     except Exception:
         sentence = None
 
@@ -289,17 +289,76 @@ async def refeed_slash(interaction: discord.Interaction):
 
     saved = 0
     bot_user_id = bot.user.id if bot.user else None
-    async for msg in channel.history(limit=1000, oldest_first=False):
-        if msg.author.bot:
-            continue
-        text = sanitize_message_for_chat(msg.content or "", bot_user_id)
-        if len(text.split()) <= 3:
-            continue
-        if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
-            saved += 1
-            _note_corpus_insert(interaction.guild.id, msg.channel.id)
+
+    last_msg_id: int | None = None
+    while True:
+        before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
+        batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
+        if not batch:
+            break
+
+        for msg in batch:
+            if msg.author.bot:
+                continue
+            text = sanitize_message_for_chat(msg.content or "", bot_user_id)
+            if len(text.split()) <= 3:
+                continue
+            if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
+                saved += 1
+                _note_corpus_insert(interaction.guild.id, msg.channel.id)
+
+        last_msg_id = batch[-1].id
 
     await interaction.followup.send(f"✅ Guardados {saved} mensajes en el corpus.")
+
+
+@bot.tree.command(name="refeed_all", description="Guarda mensajes de todos los canales de texto del servidor en el corpus del modelo Markov.")
+async def refeed_all_slash(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+
+    await interaction.response.defer(thinking=True)
+
+    me = interaction.guild.me
+    if me is None and bot.user is not None:
+        me = interaction.guild.get_member(bot.user.id)
+    if me is None:
+        await interaction.followup.send("No puedo determinar los permisos del bot.")
+        return
+
+    total_saved = 0
+    bot_user_id = bot.user.id if bot.user else None
+
+    for channel in interaction.guild.text_channels:
+        perms = channel.permissions_for(me)
+        if not (perms.read_messages and perms.read_message_history):
+            continue
+
+        saved = 0
+        last_msg_id: int | None = None
+        while True:
+            before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
+            batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
+            if not batch:
+                break
+
+            for msg in batch:
+                if msg.author.bot:
+                    continue
+                text = sanitize_message_for_chat(msg.content or "", bot_user_id)
+                if len(text.split()) <= 3:
+                    continue
+                if await save_corpus_message(interaction.guild.id, msg.channel.id, text):
+                    saved += 1
+                    _note_corpus_insert(interaction.guild.id, msg.channel.id)
+
+            last_msg_id = batch[-1].id
+
+        total_saved += saved
+        await interaction.followup.send(f"✅ {channel.mention}: guardados {saved} mensajes.", ephemeral=True)
+
+    await interaction.followup.send(f"✅ Refeed_all completado. Total guardado: {total_saved} mensajes.")
 
 
 @bot.tree.command(name="generar", description="Genera un mensaje usando el modelo Markov del canal.")
