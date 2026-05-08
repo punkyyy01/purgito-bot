@@ -25,6 +25,7 @@ from db import (
     wipe_corpus,
     save_gif_url,
     get_random_gif,
+    count_gif_urls,
 )
 
 # Cargar variables de entorno
@@ -654,6 +655,38 @@ async def corpus_info_slash(interaction: discord.Interaction):
     if count < 50:
         msg += "\n⚠️ Necesita al menos 50 mensajes para generar bien."
     await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="gif_add", description="Agrega un GIF a la colección del servidor.")
+@app_commands.describe(url="URL del GIF (tenor.com, giphy.com o cdn.discordapp.com)")
+async def gif_add_slash(interaction: discord.Interaction, url: str):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    url = url.strip()
+    if "cdn.discordapp.com" in url:
+        final_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+        if not final_url:
+            await interaction.followup.send("❌ No se pudo subir el GIF a R2. Comprueba que la URL sea accesible.")
+            return
+    elif "tenor.com" in url or "giphy.com" in url:
+        final_url = url
+    else:
+        await interaction.followup.send("❌ URL no reconocida. Solo se aceptan GIFs de tenor.com, giphy.com o cdn.discordapp.com.")
+        return
+
+    inserted = await save_gif_url(interaction.guild.id, final_url)
+    total = await count_gif_urls(interaction.guild.id)
+    if inserted:
+        await interaction.followup.send(f"✅ GIF guardado. La colección del servidor tiene {total} GIFs en total.")
+    else:
+        await interaction.followup.send(f"ℹ️ Ese GIF ya estaba en la colección. Total: {total} GIFs.")
 
 
 if __name__ == "__main__":

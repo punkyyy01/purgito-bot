@@ -196,3 +196,13 @@ async def get_random_gif(guild_id: int) -> str | None:
     ) as cursor:
         row = await cursor.fetchone()
     return row[0] if row else None
+
+
+async def count_gif_urls(guild_id: int) -> int:
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM corpus_gifs WHERE guild_id=?",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return int(row[0] if row else 0)
