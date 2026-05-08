@@ -44,7 +44,7 @@ _markov_cache: dict[tuple[int, int], markovify.Text] = {}
 _message_counter: dict[tuple[int, int], int] = {}
 _corpus_insert_counter: dict[tuple[int, int], int] = {}
 
-_GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com)\S*', re.IGNORECASE)
+_GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
 
 ALLOWED_ROLE_IDS = {1434103563746803801, 1434103563700666401}
 
@@ -272,6 +272,16 @@ async def on_message(message: discord.Message):
                 except Exception:
                     pass
 
+        for attachment in message.attachments:
+            if attachment.url and (
+                attachment.url.lower().endswith('.gif') or
+                (attachment.content_type and 'gif' in attachment.content_type)
+            ):
+                try:
+                    await save_gif_url(message.guild.id, attachment.url)
+                except Exception:
+                    pass
+
         cleaned = clean_for_corpus(message.content or "")
         inserted = False
         if cleaned is not None:
@@ -382,6 +392,16 @@ async def refeed_slash(interaction: discord.Interaction):
                     except Exception:
                         pass
 
+            for attachment in msg.attachments:
+                if attachment.url and (
+                    attachment.url.lower().endswith('.gif') or
+                    (attachment.content_type and 'gif' in attachment.content_type)
+                ):
+                    try:
+                        await save_gif_url(interaction.guild.id, attachment.url)
+                    except Exception:
+                        pass
+
             cleaned = clean_for_corpus(msg.content or "")
             if cleaned is None:
                 continue
@@ -436,6 +456,16 @@ async def refeed_all_slash(interaction: discord.Interaction):
                     for m in _GIF_RE.finditer(msg.content):
                         try:
                             await save_gif_url(interaction.guild.id, m.group(0))
+                        except Exception:
+                            pass
+
+                for attachment in msg.attachments:
+                    if attachment.url and (
+                        attachment.url.lower().endswith('.gif') or
+                        (attachment.content_type and 'gif' in attachment.content_type)
+                    ):
+                        try:
+                            await save_gif_url(interaction.guild.id, attachment.url)
                         except Exception:
                             pass
 
