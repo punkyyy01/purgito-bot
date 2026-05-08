@@ -40,7 +40,7 @@ _CONECTORES_FINALES = [
     " y", " o", " con", " pero", " de", " para", " a", " que", " entonces", " como"
 ]
 
-_markov_cache: dict[tuple[int, int], markovify.Text] = {}
+_markov_cache: dict[int, markovify.Text] = {}
 _message_counter: dict[tuple[int, int], int] = {}
 _corpus_insert_counter: dict[tuple[int, int], int] = {}
 
@@ -61,7 +61,7 @@ def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
     n = _corpus_insert_counter.get(key, 0) + 1
     if n >= 50:
         _corpus_insert_counter[key] = 0
-        _markov_cache.pop(key, None)
+        _markov_cache.pop(guild_id, None)
     else:
         _corpus_insert_counter[key] = n
 
@@ -138,13 +138,6 @@ def post_process_reply(text: str) -> str:
 
     return text.strip()
 
-def sanitize_message_for_chat(content: str, bot_user_id: int | None) -> str:
-    text = (content or "").strip()
-    if bot_user_id:
-        text = text.replace(f"<@{bot_user_id}>", "").replace(f"<@!{bot_user_id}>", "")
-    return text.strip()
-
-
 _ANSI_ESCAPE_RE = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
 _ANSI_BRACKET_RE = re.compile(r'\]\d*;[^\]]*')
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -183,7 +176,7 @@ def clean_for_corpus(text: str) -> str | None:
 
 
 async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text | None:
-    key = (guild_id, channel_id)
+    key = guild_id
     cached = _markov_cache.get(key)
     if cached is not None:
         return cached
@@ -534,14 +527,19 @@ async def corpus_wipe_slash(interaction: discord.Interaction):
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
 
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+
     await wipe_corpus(interaction.guild.id)
 
     # Limpiar caches por guild
     gid = interaction.guild.id
-    for key in [k for k in _markov_cache.keys() if k[0] == gid]:
-        _markov_cache.pop(key, None)
+    _markov_cache.pop(gid, None)
     for key in [k for k in _corpus_insert_counter.keys() if k[0] == gid]:
         _corpus_insert_counter.pop(key, None)
+    for key in [k for k in _message_counter.keys() if k[0] == gid]:
+        _message_counter.pop(key, None)
 
     await interaction.response.send_message("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
 
