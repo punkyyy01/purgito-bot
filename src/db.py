@@ -12,9 +12,6 @@ _db: aiosqlite.Connection | None = None
 # Lock para serializar operaciones de escritura compuestas
 _db_lock = asyncio.Lock()
 
-# Cache de guilds con perfil default ya creado
-guild_cache = set()
-
 async def get_db() -> aiosqlite.Connection:
     """Devuelve la conexión global. Debe llamarse después de init_db()."""
     if _db is None:
@@ -68,6 +65,8 @@ async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
 async def init_db():
     """Inicializa la conexión global y crea las tablas."""
     global _db
+    if _db is not None:
+        return
     os.makedirs(DATA_DIR, exist_ok=True)
     _db = await aiosqlite.connect(DB_PATH)
     # Activar modo WAL para mejor concurrencia
@@ -86,18 +85,30 @@ async def close_db():
         await _db.close()
         _db = None
 
+
+async def _was_inserted(cursor: aiosqlite.Cursor) -> bool:
+    if cursor.rowcount == 1:
+        return True
+    if cursor.rowcount == 0:
+        return False
+    if cursor.rowcount == -1:
+        db = cursor.connection
+        async with db.execute("SELECT changes()") as cur:
+            row = await cur.fetchone()
+        return bool(row and row[0] == 1)
+    return False
+
 # Settings helpers
 async def set_chat_mode(guild_id: int, enabled: bool, channel_id: int | None = None):
     db = await get_db()
     async with _db_lock:
         await db.execute(
-            "INSERT INTO settings (guild_id, chat_mode_enabled, chat_channel_id) VALUES (?, 0, NULL)"
-            " ON CONFLICT(guild_id) DO NOTHING",
-            (guild_id,),
-        )
-        await db.execute(
-            "UPDATE settings SET chat_mode_enabled=?, chat_channel_id=? WHERE guild_id=?",
-            (1 if enabled else 0, channel_id, guild_id),
+            "INSERT INTO settings (guild_id, chat_mode_enabled, chat_channel_id) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            "    chat_mode_enabled=excluded.chat_mode_enabled, "
+            "    chat_channel_id=excluded.chat_channel_id",
+            (guild_id, 1 if enabled else 0, channel_id),
         )
         await db.commit()
 
@@ -126,11 +137,7 @@ async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> b
             "INSERT OR IGNORE INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
             (guild_id, channel_id, text),
         )
-        inserted = cursor.rowcount == 1
-        if cursor.rowcount == -1:
-            async with db.execute("SELECT changes()") as cur:
-                row = await cur.fetchone()
-                inserted = bool(row and row[0] == 1)
+        inserted = await _was_inserted(cursor)
         await db.commit()
     return inserted
 
@@ -176,11 +183,7 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
             "INSERT OR IGNORE INTO corpus_gifs (guild_id, url) VALUES (?, ?)",
             (guild_id, u),
         )
-        inserted = cursor.rowcount == 1
-        if cursor.rowcount == -1:
-            async with db.execute("SELECT changes()") as cur:
-                row = await cur.fetchone()
-                inserted = bool(row and row[0] == 1)
+        inserted = await _was_inserted(cursor)
         await db.commit()
     return inserted
 

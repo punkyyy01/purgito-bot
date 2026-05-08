@@ -45,6 +45,7 @@ _message_counter: dict[tuple[int, int], int] = {}
 _corpus_insert_counter: dict[tuple[int, int], int] = {}
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
+_REFEED_MAX_MESSAGES = 20_000
 
 ALLOWED_ROLE_IDS = {1434103563746803801, 1434103563700666401}
 
@@ -175,7 +176,7 @@ def clean_for_corpus(text: str) -> str | None:
     return t
 
 
-async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text | None:
+async def build_markov_model(guild_id: int) -> markovify.Text | None:
     key = guild_id
     cached = _markov_cache.get(key)
     if cached is not None:
@@ -195,8 +196,8 @@ async def build_markov_model(guild_id: int, channel_id: int) -> markovify.Text |
     return model
 
 
-async def generate_markov_reply(guild_id: int, channel_id: int) -> str | None:
-    model = await build_markov_model(guild_id, channel_id)
+async def generate_markov_reply(guild_id: int) -> str | None:
+    model = await build_markov_model(guild_id)
     if not model:
         return None
 
@@ -256,6 +257,8 @@ async def on_message(message: discord.Message):
     if (message.content or "").strip().startswith("!"):
         return
 
+    auto_generate = False
+
     if message.guild:
         # Guardar GIFs (tenor/giphy) si aparecen en el mensaje
         if message.content:
@@ -279,8 +282,6 @@ async def on_message(message: discord.Message):
         inserted = False
         if cleaned is not None:
             inserted = await save_corpus_message(message.guild.id, message.channel.id, cleaned)
-
-        auto_generate = False
         if inserted:
             _note_corpus_insert(message.guild.id, message.channel.id)
             key = (message.guild.id, message.channel.id)
@@ -289,14 +290,14 @@ async def on_message(message: discord.Message):
                 _message_counter[key] = 0
                 auto_generate = True
 
-            # Reacción aleatoria con emoji custom del server
-            if random.random() < 0.05:
-                try:
-                    emojis = list(getattr(message.guild, "emojis", []) or [])
-                    if emojis:
-                        await message.add_reaction(random.choice(emojis))
-                except Exception:
-                    pass
+        # Reacción aleatoria con emoji custom del server
+        if random.random() < 0.05:
+            try:
+                emojis = list(getattr(message.guild, "emojis", []) or [])
+                if emojis:
+                    await message.add_reaction(random.choice(emojis))
+            except Exception:
+                pass
 
     # 2. Verificar si el bot fue mencionado o si le respondieron a él directamente
     mention_bot = bool(bot.user and bot.user.id in (message.raw_mentions or []))
@@ -314,7 +315,7 @@ async def on_message(message: discord.Message):
                     if gif_url:
                         await message.channel.send(gif_url)
                         return
-                reply = await generate_markov_reply(message.guild.id, message.channel.id)
+                reply = await generate_markov_reply(message.guild.id)
                 if reply is not None:
                     reply = post_process_reply(reply)
                     for chunk in chunk_message(reply):
@@ -334,7 +335,7 @@ async def on_message(message: discord.Message):
         return
 
     async with message.channel.typing():
-        reply = await generate_markov_reply(message.guild.id, message.channel.id)
+        reply = await generate_markov_reply(message.guild.id)
         reply = post_process_reply(reply) if reply else "..."
 
     for chunk in chunk_message(reply):
@@ -366,13 +367,15 @@ async def refeed_slash(interaction: discord.Interaction):
         return
 
     saved = 0
+    fetched = 0
 
     last_msg_id: int | None = None
-    while True:
+    while fetched < _REFEED_MAX_MESSAGES:
         before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
         batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
         if not batch:
             break
+        fetched += len(batch)
 
         for msg in batch:
             if msg.author.bot:
@@ -404,7 +407,10 @@ async def refeed_slash(interaction: discord.Interaction):
 
         last_msg_id = batch[-1].id
 
-    await interaction.followup.send(f"✅ Guardados {saved} mensajes en el corpus.")
+    result = f"✅ Guardados {saved} mensajes en el corpus."
+    if fetched >= _REFEED_MAX_MESSAGES:
+        result += f"\n⚠️ Límite de {_REFEED_MAX_MESSAGES:,} mensajes leídos alcanzado; el canal puede tener más."
+    await interaction.followup.send(result)
 
 
 @bot.tree.command(name="refeed_all", description="Guarda mensajes de todos los canales de texto del servidor en el corpus del modelo Markov.")
@@ -427,19 +433,23 @@ async def refeed_all_slash(interaction: discord.Interaction):
         return
 
     total_saved = 0
+    total_fetched = 0
 
     for channel in interaction.guild.text_channels:
+        if total_fetched >= _REFEED_MAX_MESSAGES:
+            break
         perms = channel.permissions_for(me)
         if not (perms.read_messages and perms.read_message_history):
             continue
 
         saved = 0
         last_msg_id: int | None = None
-        while True:
+        while total_fetched < _REFEED_MAX_MESSAGES:
             before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
             batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
             if not batch:
                 break
+            total_fetched += len(batch)
 
             for msg in batch:
                 if msg.author.bot:
@@ -472,9 +482,11 @@ async def refeed_all_slash(interaction: discord.Interaction):
             last_msg_id = batch[-1].id
 
         total_saved += saved
-        await interaction.followup.send(f"✅ {channel.mention}: guardados {saved} mensajes.", ephemeral=True)
 
-    await interaction.followup.send(f"✅ Refeed_all completado. Total guardado: {total_saved} mensajes.")
+    result = f"✅ Refeed_all completado. Total guardado: {total_saved} mensajes."
+    if total_fetched >= _REFEED_MAX_MESSAGES:
+        result += f"\n⚠️ Límite de {_REFEED_MAX_MESSAGES:,} mensajes leídos alcanzado; algunos canales pueden estar incompletos."
+    await interaction.followup.send(result)
 
 
 @bot.tree.command(name="generar", description="Genera un mensaje usando el modelo Markov del canal.")
@@ -484,7 +496,10 @@ async def generar_slash(interaction: discord.Interaction):
         return
 
     await interaction.response.defer(thinking=True)
-    reply = await generate_markov_reply(interaction.guild.id, interaction.channel.id)
+    if interaction.channel is None:
+        await interaction.followup.send("No puedo determinar el canal.", ephemeral=True)
+        return
+    reply = await generate_markov_reply(interaction.guild.id)
     reply = post_process_reply(reply) if reply else "..."
     await interaction.followup.send(reply)
 
@@ -523,12 +538,13 @@ async def chatmode_slash(interaction: discord.Interaction, estado: app_commands.
 
 @bot.tree.command(name="corpus_wipe", description="Borra el corpus del servidor (mensajes) y reinicia el cache Markov.")
 async def corpus_wipe_slash(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     if not interaction.guild:
-        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        await interaction.followup.send("Solo en servidores.", ephemeral=True)
         return
 
     if not has_allowed_role(interaction):
-        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        await interaction.followup.send("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
     await wipe_corpus(interaction.guild.id)
@@ -541,13 +557,17 @@ async def corpus_wipe_slash(interaction: discord.Interaction):
     for key in [k for k in _message_counter.keys() if k[0] == gid]:
         _message_counter.pop(key, None)
 
-    await interaction.response.send_message("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
+    await interaction.followup.send("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
 
 
 @bot.tree.command(name="corpus_info", description="Muestra cuántos mensajes hay en el corpus del canal actual.")
 async def corpus_info_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+
+    if interaction.channel is None:
+        await interaction.response.send_message("No puedo determinar el canal.", ephemeral=True)
         return
 
     count = await count_corpus_messages(interaction.guild.id, interaction.channel.id)
