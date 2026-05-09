@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS youtube_subscriptions (
     discord_channel_id INTEGER NOT NULL,
     UNIQUE(guild_id, youtube_channel_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_corpus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    author_name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(guild_id, author_id, content)
+);
 """
 
 async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
@@ -59,15 +69,21 @@ async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
 
     Para bases existentes, deduplica y luego crea un índice único (SQLite no permite
     agregar constraints UNIQUE a una tabla existente sin recrearla).
+    Solo ejecuta el DELETE la primera vez; si el índice ya existe lo omite.
     """
-    # Eliminar duplicados existentes (conserva el id más chico por grupo)
-    await db.execute(
-        "DELETE FROM corpus_messages "
-        "WHERE id NOT IN ("
-        "  SELECT MIN(id) FROM corpus_messages GROUP BY guild_id, channel_id, content"
-        ")"
-    )
-    # Índice único para garantizar unicidad a nivel DB también en tablas legacy
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='corpus_messages_unique_idx'"
+    ) as cur:
+        already_migrated = await cur.fetchone() is not None
+
+    if not already_migrated:
+        await db.execute(
+            "DELETE FROM corpus_messages "
+            "WHERE id NOT IN ("
+            "  SELECT MIN(id) FROM corpus_messages GROUP BY guild_id, channel_id, content"
+            ")"
+        )
+
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS corpus_messages_unique_idx "
         "ON corpus_messages(guild_id, channel_id, content)"
@@ -103,10 +119,8 @@ async def close_db():
         _db = None
 
 
-async def _was_inserted(cursor: aiosqlite.Cursor) -> bool:
-    if cursor.rowcount == 1:
-        return True
-    return False
+def _was_inserted(cursor: aiosqlite.Cursor) -> bool:
+    return cursor.rowcount == 1
 
 # Settings helpers
 async def set_chat_mode(guild_id: int, enabled: bool, channel_id: int | None = None):
@@ -147,7 +161,7 @@ async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> b
             "INSERT OR IGNORE INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
             (guild_id, channel_id, text),
         )
-        inserted = await _was_inserted(cursor)
+        inserted = _was_inserted(cursor)
         await db.commit()
     return inserted
 
@@ -193,7 +207,7 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
             "INSERT OR IGNORE INTO corpus_gifs (guild_id, url) VALUES (?, ?)",
             (guild_id, u),
         )
-        inserted = await _was_inserted(cursor)
+        inserted = _was_inserted(cursor)
         await db.commit()
     return inserted
 
@@ -234,7 +248,7 @@ async def add_youtube_sub(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id, mention_role_id),
         )
-        inserted = await _was_inserted(cursor)
+        inserted = _was_inserted(cursor)
         await db.commit()
     return inserted
 
@@ -316,3 +330,41 @@ async def set_youtube_mention_role(guild_id: int, youtube_channel_id: str, role_
         updated = cursor.rowcount > 0
         await db.commit()
     return updated
+
+
+async def save_user_message(guild_id: int, author_id: int, author_name: str, content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    if len(text.split()) <= 3:
+        return False
+
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO user_corpus (guild_id, author_id, author_name, content) VALUES (?, ?, ?, ?)",
+            (guild_id, author_id, author_name, text),
+        )
+        inserted = _was_inserted(cursor)
+        await db.commit()
+    return inserted
+
+
+async def get_user_messages(guild_id: int, author_id: int, limit: int = 300) -> list[str]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT content FROM user_corpus WHERE guild_id=? AND author_id=? ORDER BY RANDOM() LIMIT ?",
+        (guild_id, author_id, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
+async def count_user_messages(guild_id: int, author_id: int) -> int:
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM user_corpus WHERE guild_id=? AND author_id=?",
+        (guild_id, author_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return int(row[0] if row else 0)

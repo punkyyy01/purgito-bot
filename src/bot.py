@@ -34,6 +34,9 @@ from db import (
     get_all_youtube_subs,
     update_last_video_id,
     set_youtube_mention_role,
+    save_user_message,
+    get_user_messages,
+    count_user_messages,
 )
 
 # Cargar variables de entorno
@@ -58,6 +61,8 @@ _CONECTORES_FINALES = [
 _markov_cache: dict[int, markovify.Text] = {}
 _message_counter: dict[tuple[int, int], int] = {}
 _corpus_insert_counter: dict[tuple[int, int], int] = {}
+_user_markov_cache: dict[tuple[int, int], markovify.Text] = {}
+_user_corpus_insert_counter: dict[tuple[int, int], int] = {}
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
 _REFEED_MAX_MESSAGES = 20_000
@@ -89,6 +94,16 @@ def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
         _markov_cache.pop(guild_id, None)
     else:
         _corpus_insert_counter[key] = n
+
+
+def _note_user_corpus_insert(guild_id: int, author_id: int) -> None:
+    key = (guild_id, author_id)
+    n = _user_corpus_insert_counter.get(key, 0) + 1
+    if n >= 50:
+        _user_corpus_insert_counter[key] = 0
+        _user_markov_cache.pop(key, None)
+    else:
+        _user_corpus_insert_counter[key] = n
 
 # 1. BOT CUSTOM PARA CIERRE LIMPIO DE BASE DE DATOS
 class MyCustomBot(commands.Bot):
@@ -196,7 +211,7 @@ async def build_markov_model(guild_id: int) -> markovify.Text | None:
 
     text = "\n".join(corpus)
     try:
-        model = markovify.Text(text, state_size=1, well_formed=False)
+        model = await asyncio.to_thread(markovify.Text, text, state_size=2, well_formed=False)
     except Exception:
         return None
 
@@ -219,6 +234,27 @@ async def generate_markov_reply(guild_id: int) -> str | None:
     return None
 
 
+async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
+    key = (guild_id, author_id)
+    model = _user_markov_cache.get(key)
+    if model is None:
+        corpus = await get_user_messages(guild_id, author_id, limit=300)
+        if len(corpus) < 30:
+            return None
+        text = "\n".join(corpus)
+        try:
+            model = await asyncio.to_thread(markovify.Text, text, state_size=1, well_formed=False)
+        except Exception:
+            return None
+        _user_markov_cache[key] = model
+
+    try:
+        sentence = model.make_short_sentence(max_chars=80, tries=50)
+    except Exception:
+        sentence = None
+    return sentence if sentence else None
+
+
 def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
@@ -227,7 +263,7 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
             print(f"[R2 ERROR] HTTP {resp.status_code} al descargar {url}")
             return None
         data = resp.content
-        key = f"{guild_id}/{hashlib.md5(url.encode()).hexdigest()}.gif"
+        key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}.gif"
         _r2_client.put_object(
             Bucket=os.getenv("R2_BUCKET_NAME", ""),
             Key=key,
@@ -367,6 +403,9 @@ async def on_message(message: discord.Message):
         inserted = False
         if cleaned is not None:
             inserted = await save_corpus_message(message.guild.id, message.channel.id, cleaned)
+            user_inserted = await save_user_message(message.guild.id, message.author.id, message.author.display_name, cleaned)
+            if user_inserted:
+                _note_user_corpus_insert(message.guild.id, message.author.id)
         if inserted:
             _note_corpus_insert(message.guild.id, message.channel.id)
             key = (message.guild.id, message.channel.id)
@@ -501,6 +540,8 @@ async def refeed_slash(interaction: discord.Interaction):
             if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
                 saved += 1
                 _note_corpus_insert(interaction.guild.id, msg.channel.id)
+            if await save_user_message(interaction.guild.id, msg.author.id, msg.author.display_name, cleaned):
+                _note_user_corpus_insert(interaction.guild.id, msg.author.id)
 
         last_msg_id = batch[-1].id
 
@@ -588,6 +629,8 @@ async def refeed_all_slash(interaction: discord.Interaction):
                 if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
                     saved += 1
                     _note_corpus_insert(interaction.guild.id, msg.channel.id)
+                if await save_user_message(interaction.guild.id, msg.author.id, msg.author.display_name, cleaned):
+                    _note_user_corpus_insert(interaction.guild.id, msg.author.id)
 
             last_msg_id = batch[-1].id
 
@@ -666,6 +709,8 @@ async def corpus_wipe_slash(interaction: discord.Interaction):
         _corpus_insert_counter.pop(key, None)
     for key in [k for k in _message_counter.keys() if k[0] == gid]:
         _message_counter.pop(key, None)
+    for key in [k for k in _user_corpus_insert_counter.keys() if k[0] == gid]:
+        _user_corpus_insert_counter.pop(key, None)
 
     await interaction.followup.send("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
 
@@ -841,6 +886,32 @@ async def youtube_set_mention_slash(
         await interaction.response.send_message(
             f"✅ Mención eliminada de las notificaciones de `{channel_id}`.", ephemeral=True
         )
+
+
+@bot.tree.command(name="imitar", description="Genera un mensaje imitando el estilo de un usuario del servidor.")
+@app_commands.describe(usuario="Usuario a imitar")
+async def imitar_slash(interaction: discord.Interaction, usuario: discord.Member):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+
+    await interaction.response.defer(thinking=True)
+
+    count = await count_user_messages(interaction.guild.id, usuario.id)
+    if count < 30:
+        await interaction.followup.send(
+            f"⚠️ **{usuario.display_name}** solo tiene {count} mensaje(s) en el corpus. Necesita al menos 30."
+        )
+        return
+
+    result = await generate_markov_for_user(interaction.guild.id, usuario.id)
+    if result is None:
+        await interaction.followup.send(
+            f"⚠️ No se pudo generar un mensaje para **{usuario.display_name}**. Intenta más tarde."
+        )
+        return
+
+    await interaction.followup.send(f'🎭 **{usuario.display_name}** diría: "{result}"')
 
 
 if __name__ == "__main__":
