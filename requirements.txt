@@ -4,3 +4,4 @@ aiosqlite
 markovify
 boto3
 aiohttp
+requests

@@ -229,8 +229,12 @@ async def generate_markov_reply(guild_id: int) -> str | None:
 
 def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            data = resp.read()
+        import requests
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        data = resp.content
         key = f"{guild_id}/{hashlib.md5(url.encode()).hexdigest()}.gif"
         _r2_client.put_object(
             Bucket=os.getenv("R2_BUCKET_NAME", ""),
