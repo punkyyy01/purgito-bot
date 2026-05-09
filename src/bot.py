@@ -1,9 +1,11 @@
 import os
 import sys
 import re
+import regex
 import random
 import asyncio
 import hashlib
+import traceback
 import requests
 import boto3
 import feedparser
@@ -117,22 +119,7 @@ def chunk_message(text: str, max_length: int = 1900) -> list[str]:
         text = text[cut_index:].strip()
     return chunks
 
-# Regex para eliminar emojis Unicode de la respuesta
-_EMOJI_RE = re.compile(
-    "[\U0001F600-\U0001F64F"  # emoticones
-    "\U0001F300-\U0001F5FF"   # símbolos y pictogramas
-    "\U0001F680-\U0001F6FF"   # transporte y mapas
-    "\U0001F1E0-\U0001F1FF"   # banderas
-    "\U00002702-\U000027B0"   # dingbats
-    "\U0000FE00-\U0000FE0F"   # variaciones
-    "\U0001F900-\U0001F9FF"   # suplementarios
-    "\U0001FA00-\U0001FA6F"   # chess/extended-A
-    "\U0001FA70-\U0001FAFF"   # extended-B
-    "\U00002600-\U000026FF"   # misceláneos
-    "\U0000200D"              # zero width joiner
-    "\U00002B50"              # estrella
-    "]+"
-)
+_EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', regex.UNICODE)
 
 # Frases que delatan a la IA "asistente"
 def post_process_reply(text: str) -> str:
@@ -142,7 +129,7 @@ def post_process_reply(text: str) -> str:
     # Limpieza básica
     text = text.lower().strip()
     text = _EMOJI_RE.sub("", text).strip()
-    text = text.replace("\n", " ").replace("  ", " ")
+    text = re.sub(r"\s+", " ", text)
 
     # Filtro de conectores finales
     changed = True
@@ -250,7 +237,6 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         )
         return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
     except Exception:
-        import traceback
         print(f"[R2 ERROR] {traceback.format_exc()}")
         return None
 
@@ -265,6 +251,8 @@ async def get_latest_video(youtube_channel_id: str) -> dict | None:
             return None
         entry = feed.entries[0]
         video_id = getattr(entry, "yt_videoid", None) or entry.get("id", "").split(":")[-1]
+        if not video_id:
+            return None
         return {
             "id": video_id,
             "title": entry.get("title", ""),
@@ -293,7 +281,7 @@ async def check_youtube():
                         f"{mention}📺 **{video['author']}** subió un video nuevo!\n"
                         f"**{video['title']}**\n{video['url']}"
                     )
-                await update_last_video_id(sub["guild_id"], sub["youtube_channel_id"], video["id"])
+                    await update_last_video_id(sub["guild_id"], sub["youtube_channel_id"], video["id"])
         except Exception as e:
             print(f"[YouTube] Error procesando {sub['youtube_channel_id']}: {e}")
 
@@ -633,7 +621,7 @@ async def chatmode_slash(interaction: discord.Interaction, estado: app_commands.
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not interaction.user.guild_permissions.manage_guild:
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
         await interaction.response.send_message("❌ Necesitas el permiso `Gestionar servidor`.", ephemeral=True)
         return
 
