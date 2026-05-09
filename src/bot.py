@@ -211,7 +211,7 @@ async def build_markov_model(guild_id: int) -> markovify.Text | None:
 
     text = "\n".join(corpus)
     try:
-        model = await asyncio.to_thread(markovify.Text, text, state_size=2, well_formed=False)
+        model = await asyncio.to_thread(markovify.Text, text, state_size=1, well_formed=False)
     except Exception:
         return None
 
