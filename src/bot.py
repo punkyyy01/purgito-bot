@@ -434,7 +434,7 @@ async def on_message(message: discord.Message):
     if not (mention_bot or reply_to_bot):
         if message.guild and auto_generate:
             try:
-                if random.random() < 0.15:
+                if random.random() < 0.35:
                     gif_url = await get_random_gif(message.guild.id)
                     if gif_url:
                         await message.channel.send(gif_url)
