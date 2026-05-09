@@ -86,6 +86,11 @@ async def init_db():
     # Crear tablas
     await _db.executescript(SCHEMA)
     await _migrate_corpus_uniqueness(_db)
+    try:
+        await _db.execute("ALTER TABLE youtube_subscriptions ADD COLUMN mention_role_id INTEGER")
+        await _db.commit()
+    except Exception:
+        pass
     await _db.commit()
 
 
@@ -225,14 +230,15 @@ async def add_youtube_sub(
     youtube_channel_id: str,
     youtube_channel_name: str,
     discord_channel_id: int,
+    mention_role_id: int | None = None,
 ) -> bool:
     db = await get_db()
     async with _db_lock:
         cursor = await db.execute(
             "INSERT OR IGNORE INTO youtube_subscriptions "
-            "(guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id),
+            "(guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id, mention_role_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id, mention_role_id),
         )
         inserted = await _was_inserted(cursor)
         await db.commit()
@@ -254,7 +260,7 @@ async def remove_youtube_sub(guild_id: int, youtube_channel_id: str) -> bool:
 async def list_youtube_subs(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, guild_id, channel_id, youtube_channel_id, youtube_channel_name, last_video_id, discord_channel_id "
+        "SELECT id, guild_id, channel_id, youtube_channel_id, youtube_channel_name, last_video_id, discord_channel_id, mention_role_id "
         "FROM youtube_subscriptions WHERE guild_id=?",
         (guild_id,),
     ) as cursor:
@@ -268,6 +274,7 @@ async def list_youtube_subs(guild_id: int) -> list[dict]:
             "youtube_channel_name": r[4],
             "last_video_id": r[5],
             "discord_channel_id": r[6],
+            "mention_role_id": r[7],
         }
         for r in rows
     ]
@@ -276,7 +283,7 @@ async def list_youtube_subs(guild_id: int) -> list[dict]:
 async def get_all_youtube_subs() -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, guild_id, channel_id, youtube_channel_id, youtube_channel_name, last_video_id, discord_channel_id "
+        "SELECT id, guild_id, channel_id, youtube_channel_id, youtube_channel_name, last_video_id, discord_channel_id, mention_role_id "
         "FROM youtube_subscriptions"
     ) as cursor:
         rows = await cursor.fetchall()
@@ -289,6 +296,7 @@ async def get_all_youtube_subs() -> list[dict]:
             "youtube_channel_name": r[4],
             "last_video_id": r[5],
             "discord_channel_id": r[6],
+            "mention_role_id": r[7],
         }
         for r in rows
     ]
@@ -302,3 +310,15 @@ async def update_last_video_id(guild_id: int, youtube_channel_id: str, video_id:
             (video_id, guild_id, youtube_channel_id),
         )
         await db.commit()
+
+
+async def set_youtube_mention_role(guild_id: int, youtube_channel_id: str, role_id: int | None) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "UPDATE youtube_subscriptions SET mention_role_id=? WHERE guild_id=? AND youtube_channel_id=?",
+            (role_id, guild_id, youtube_channel_id),
+        )
+        updated = cursor.rowcount > 0
+        await db.commit()
+    return updated

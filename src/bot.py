@@ -32,6 +32,7 @@ from db import (
     list_youtube_subs,
     get_all_youtube_subs,
     update_last_video_id,
+    set_youtube_mention_role,
 )
 
 # Cargar variables de entorno
@@ -305,13 +306,13 @@ async def check_youtube():
             if video["id"] != sub["last_video_id"]:
                 channel = bot.get_channel(sub["discord_channel_id"])
                 if channel and isinstance(channel, discord.TextChannel):
-                    embed = discord.Embed(
-                        title=video["title"],
-                        url=video["url"],
-                        description=f"Nuevo video de **{video['author']}**",
-                        color=discord.Color.red(),
+                    mention = ""
+                    if sub.get("mention_role_id"):
+                        mention = f"<@&{sub['mention_role_id']}> "
+                    await channel.send(
+                        f"{mention}📺 **{video['author']}** subió un video nuevo!\n"
+                        f"**{video['title']}**\n{video['url']}"
                     )
-                    await channel.send(embed=embed)
                 await update_last_video_id(sub["guild_id"], sub["youtube_channel_id"], video["id"])
         except Exception as e:
             print(f"[YouTube] Error procesando {sub['youtube_channel_id']}: {e}")
@@ -748,11 +749,13 @@ async def gif_add_slash(interaction: discord.Interaction, url: str):
 @app_commands.describe(
     youtube_channel_id="ID del canal de YouTube (empieza con UC...)",
     discord_channel="Canal de Discord donde se avisarán los nuevos videos",
+    rol="Rol a mencionar cuando haya un video nuevo (opcional)",
 )
 async def youtube_add_slash(
     interaction: discord.Interaction,
     youtube_channel_id: str,
     discord_channel: discord.TextChannel,
+    rol: discord.Role | None = None,
 ):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
@@ -777,13 +780,15 @@ async def youtube_add_slash(
         youtube_channel_id,
         channel_name,
         discord_channel.id,
+        mention_role_id=rol.id if rol else None,
     )
 
     if added:
         await update_last_video_id(interaction.guild.id, youtube_channel_id, video["id"])
-        await interaction.followup.send(
-            f"✅ Suscrito al canal **{channel_name}**. Los nuevos videos se avisarán en {discord_channel.mention}."
-        )
+        msg = f"✅ Suscrito al canal **{channel_name}**. Los nuevos videos se avisarán en {discord_channel.mention}."
+        if rol:
+            msg += f" Se mencionará a {rol.mention}."
+        await interaction.followup.send(msg)
     else:
         await interaction.followup.send(f"ℹ️ Ya estás suscrito al canal **{channel_name}**.")
 
@@ -829,6 +834,39 @@ async def youtube_list_slash(interaction: discord.Interaction):
         "**Suscripciones de YouTube activas:**\n" + "\n".join(lines),
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="youtube_set_mention", description="Configura el rol a mencionar en las notificaciones de un canal de YouTube.")
+@app_commands.describe(
+    channel_id="ID del canal de YouTube",
+    rol="Rol a mencionar (omitir para quitar la mención)",
+)
+async def youtube_set_mention_slash(
+    interaction: discord.Interaction,
+    channel_id: str,
+    rol: discord.Role | None = None,
+):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+
+    role_id = rol.id if rol else None
+    updated = await set_youtube_mention_role(interaction.guild.id, channel_id, role_id)
+    if not updated:
+        await interaction.response.send_message(f"ℹ️ No se encontró suscripción para `{channel_id}`.", ephemeral=True)
+        return
+
+    if rol:
+        await interaction.response.send_message(
+            f"✅ Las notificaciones de `{channel_id}` mencionarán a {rol.mention}.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"✅ Mención eliminada de las notificaciones de `{channel_id}`.", ephemeral=True
+        )
 
 
 if __name__ == "__main__":
