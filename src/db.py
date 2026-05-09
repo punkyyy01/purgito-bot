@@ -72,6 +72,7 @@ async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
         "CREATE UNIQUE INDEX IF NOT EXISTS corpus_messages_unique_idx "
         "ON corpus_messages(guild_id, channel_id, content)"
     )
+    await db.commit()
 
 async def init_db():
     """Inicializa la conexión global y crea las tablas."""
@@ -105,13 +106,6 @@ async def close_db():
 async def _was_inserted(cursor: aiosqlite.Cursor) -> bool:
     if cursor.rowcount == 1:
         return True
-    if cursor.rowcount == 0:
-        return False
-    if cursor.rowcount == -1:
-        db = cursor.connection
-        async with db.execute("SELECT changes()") as cur:
-            row = await cur.fetchone()
-        return bool(row and row[0] == 1)
     return False
 
 # Settings helpers

@@ -5,7 +5,6 @@ import random
 import asyncio
 import hashlib
 import requests
-import aiohttp
 import boto3
 import feedparser
 from botocore.config import Config
@@ -255,25 +254,6 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         print(f"[R2 ERROR] {traceback.format_exc()}")
         return None
 
-
-async def upload_gif_to_r2(url: str, guild_id: int) -> str | None:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.read()
-        key = f"{guild_id}/{hashlib.md5(url.encode()).hexdigest()}.gif"
-        await asyncio.to_thread(
-            _r2_client.put_object,
-            Bucket=os.getenv("R2_BUCKET_NAME", ""),
-            Key=key,
-            Body=data,
-            ContentType="image/gif",
-        )
-        return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
-    except Exception:
-        return None
 
 
 # --- EVENTOS PRINCIPALES ---
