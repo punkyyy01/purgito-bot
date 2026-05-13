@@ -1,30 +1,38 @@
-# Bot de Discord — Markov + GIFs + YouTube
+<div align="center">
 
-Bot para Discord escrito en Python que aprende el estilo de conversación de tu servidor, genera respuestas automáticas con cadenas de Markov, colecciona GIFs y notifica nuevos videos de YouTube.
+# 🤖 Purgatory Bot
 
----
+**Bot de Discord que aprende a hablar como tu servidor.**
 
-## Características
-
-- **Respuestas Markov automáticas** — aprende del chat y genera réplicas al estilo del servidor cada 15 mensajes nuevos
-- **Imitación de usuarios** — genera un mensaje imitando el estilo de cualquier miembro con `/imitar`
-- **Modo chat** — responde al ser mencionado o al responderle directamente
-- **Colección de GIFs** — guarda GIFs de Tenor, Giphy y Discord automáticamente; los de Discord CDN se suben a Cloudflare R2 para que no caduquen
-- **Notificaciones de YouTube** — sondea canales cada 15 minutos y avisa en Discord cuando hay video nuevo
-- **Corpus administrable** — importa el historial del servidor con `/refeed`, consulta estadísticas o limpia todo con un comando
+Cadenas de Markov · Colección de GIFs · Notificaciones de YouTube
 
 ---
 
-## Requisitos
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
+![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?style=flat-square&logo=discord&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![Cloudflare R2](https://img.shields.io/badge/Cloudflare-R2-F38020?style=flat-square&logo=cloudflare&logoColor=white)
 
-- Python 3.11+
-- Token de bot Discord ([Developer Portal](https://discord.com/developers/applications))
-- **Intents privilegiados** activados: `Message Content Intent` y `Server Members Intent`
-- (Opcional) Credenciales de Cloudflare R2 para persistir GIFs de Discord CDN
+</div>
 
 ---
 
-## Instalación
+## ✨ Características
+
+| | Característica | Descripción |
+|---|---|---|
+| 🧠 | **Markov automático** | Aprende del chat y genera réplicas al estilo del servidor cada 15 mensajes |
+| 🎭 | **Imitación de usuarios** | Imita el estilo de escritura de cualquier miembro con `/imitar` |
+| 💬 | **Modo chat** | Responde cuando lo mencionas o le haces reply |
+| 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
+| 📺 | **Notificaciones YouTube** | Sondea canales cada 15 min y avisa cuando hay video nuevo |
+| 🗂️ | **Corpus administrable** | Importa historial, consulta estadísticas o limpia el corpus con un comando |
+
+---
+
+## 🚀 Instalación
+
+### 1. Clonar e instalar dependencias
 
 ```bash
 # Linux / macOS
@@ -39,23 +47,25 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+### 2. Configurar variables de entorno
 
-## Variables de entorno
+```bash
+cp .env.example .env
+```
 
-Copia `.env.example` a `.env` y rellena los valores:
+Edita `.env` con tus valores:
 
 ```env
-# ── Obligatorio ──────────────────────────────────────────────────────────────
+# ── Obligatorio ────────────────────────────────────────────────────
 DISCORD_TOKEN=tu_token_aquí
 
-# ── Desarrollo (sync instantáneo de slash commands en tu servidor) ────────────
+# ── Desarrollo (sync instantáneo de slash commands) ────────────────
 GUILD_ID=123456789012345678
 
-# ── Intents (desactiva si no tienes el intent habilitado en el portal) ────────
+# ── Intents ────────────────────────────────────────────────────────
 ENABLE_MESSAGE_CONTENT=true
 
-# ── Cloudflare R2 (necesario para persistir GIFs de cdn.discordapp.com) ──────
+# ── Cloudflare R2 (para persistir GIFs de Discord CDN) ────────────
 R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 R2_ACCESS_KEY_ID=tu_key
 R2_SECRET_ACCESS_KEY=tu_secret
@@ -63,9 +73,7 @@ R2_BUCKET_NAME=nombre-del-bucket
 R2_PUBLIC_URL=https://pub-xxx.r2.dev
 ```
 
----
-
-## Arrancar
+### 3. Arrancar
 
 ```bash
 python src/bot.py
@@ -73,42 +81,42 @@ python src/bot.py
 
 ---
 
-## Comandos
+## 📋 Comandos
 
-### Markov y corpus
+### 🧠 Markov y corpus
 
 | Comando | Descripción | Permisos |
 |---|---|---|
-| `/refeed` | Importa los últimos mensajes del canal actual al corpus (máx. 20 000) | Rol autorizado |
+| `/refeed` | Importa los últimos mensajes del canal al corpus (máx. 20 000) | Rol autorizado |
 | `/refeed_all` | Importa mensajes de todos los canales del servidor | Rol autorizado |
 | `/generar` | Genera un mensaje con el modelo Markov del servidor | Todos |
-| `/imitar @usuario` | Genera un mensaje imitando el estilo del usuario (mín. 30 mensajes) | Todos |
+| `/imitar @usuario` | Genera un mensaje imitando el estilo del usuario (mín. 30 msgs) | Todos |
 | `/corpus_info` | Muestra cuántos mensajes tiene el corpus en el canal actual | Todos |
-| `/corpus_wipe` | Borra todo el corpus del servidor y reinicia la caché Markov | Rol autorizado |
+| `/corpus_wipe` | Borra todo el corpus y reinicia la caché Markov | Rol autorizado |
 
-### Chat automático
+### 💬 Chat automático
 
 | Comando | Descripción | Permisos |
 |---|---|---|
 | `/chatmode on [#canal]` | Activa auto-reply al ser mencionado o al responderle | Gestionar servidor |
 | `/chatmode off` | Desactiva el auto-reply | Gestionar servidor |
 
-### GIFs
+### 🎞️ GIFs
 
 | Comando | Descripción | Permisos |
 |---|---|---|
-| `/gif_add <url>` | Añade un GIF manualmente a la colección (Tenor, Giphy o Discord CDN) | Rol autorizado |
+| `/gif_add <url>` | Añade un GIF manualmente (Tenor, Giphy o Discord CDN) | Rol autorizado |
 
-### YouTube
+### 📺 YouTube
 
 | Comando | Descripción | Permisos |
 |---|---|---|
-| `/youtube_add <channel_id> #canal [rol]` | Suscribe un canal de YouTube; los nuevos videos se anuncian en el canal de Discord indicado | Rol autorizado |
+| `/youtube_add <channel_id> #canal [rol]` | Suscribe un canal de YouTube a un canal de Discord | Rol autorizado |
 | `/youtube_remove <channel_id>` | Elimina una suscripción | Rol autorizado |
 | `/youtube_list` | Lista todas las suscripciones activas del servidor | Rol autorizado |
-| `/youtube_set_mention <channel_id> [rol]` | Configura (o quita) el rol a mencionar en las notificaciones | Rol autorizado |
+| `/youtube_set_mention <channel_id> [rol]` | Configura (o quita) el rol a mencionar en notificaciones | Rol autorizado |
 
-### Utilidades
+### 🔧 Utilidades
 
 | Comando | Descripción |
 |---|---|
@@ -116,46 +124,63 @@ python src/bot.py
 
 ---
 
-## Comportamiento automático
+## ⚙️ Comportamiento automático
 
-### Corpus y limpieza de mensajes
+<details>
+<summary><b>🧠 Construcción del corpus</b></summary>
 
-Cada mensaje de usuario pasa por un filtro antes de guardarse: se eliminan URLs, menciones de Discord, secuencias ANSI y líneas sin letras. Los mensajes de menos de 4 palabras se descartan. El corpus tiene deduplicación por `(servidor, canal, contenido)`.
+Cada mensaje de usuario pasa por un filtro antes de guardarse: se eliminan URLs, menciones de Discord y líneas sin letras. Los mensajes de menos de 4 palabras se descartan. El corpus tiene deduplicación por `(servidor, canal, contenido)`.
 
-El bot mantiene dos corpus independientes:
-- **Servidor** — usado para generar respuestas generales con `/generar` y el auto-reply
-- **Por usuario** — usado exclusivamente para `/imitar`
+El bot mantiene **dos corpus independientes**:
+- **Servidor** — para respuestas generales (`/generar`, auto-reply)
+- **Por usuario** — exclusivo para `/imitar`
 
-### Generación automática
+</details>
 
-Cada vez que se insertan 15 mensajes nuevos en el corpus de un canal, el bot genera una respuesta. Con un **35 % de probabilidad** envía un GIF aleatorio de la colección en lugar del texto generado.
+<details>
+<summary><b>⚡ Generación automática</b></summary>
 
-La caché del modelo Markov se invalida automáticamente cada 50 inserciones para mantenerse actualizada sin reconstruir en cada mensaje.
+Cada **15 mensajes nuevos** insertados en el corpus de un canal, el bot genera una respuesta. Con un **35 % de probabilidad** envía un GIF aleatorio de la colección en lugar del texto.
 
-### Auto-reply (chatmode)
+La caché del modelo Markov se invalida automáticamente cada **50 inserciones** para mantenerse actualizada.
+
+</details>
+
+<details>
+<summary><b>💬 Auto-reply (chatmode)</b></summary>
 
 Si el modo está activo, el bot responde cuando:
-
 - Lo mencionan con `@bot`
-- Alguien responde (reply) directamente a uno de sus mensajes
+- Alguien le hace reply a uno de sus mensajes
 
-Se puede restringir a un canal específico con `/chatmode on #canal`. Requiere el permiso **Gestionar servidor** para activarlo o desactivarlo.
+Se puede restringir a un canal específico con `/chatmode on #canal`. Requiere el permiso **Gestionar servidor**.
 
-### Reacción aleatoria
+</details>
+
+<details>
+<summary><b>🎞️ Colección de GIFs</b></summary>
+
+Los GIFs detectados en mensajes (Tenor, Giphy, adjuntos `.gif`) se guardan automáticamente. Los de `cdn.discordapp.com` se suben a **Cloudflare R2** para que no caduquen cuando Discord elimine el adjunto original.
+
+</details>
+
+<details>
+<summary><b>😄 Reacción aleatoria</b></summary>
 
 Con un **5 % de probabilidad**, el bot reacciona a mensajes con un emoji custom del servidor.
 
-### Colección de GIFs
+</details>
 
-Los GIFs detectados automáticamente en mensajes (Tenor, Giphy, adjuntos `.gif`) se guardan en la base de datos. Los de `cdn.discordapp.com` se suben a Cloudflare R2 para que no caduquen cuando Discord elimine el adjunto.
+<details>
+<summary><b>📺 Notificaciones de YouTube</b></summary>
 
-### Notificaciones de YouTube
+Una tarea en segundo plano sondea el RSS de cada canal suscrito cada **15 minutos**. Si detecta un video nuevo, envía un mensaje en el canal de Discord configurado con el título, enlace y mención al rol (si está configurado).
 
-Una tarea en segundo plano sondea el RSS de cada canal suscrito cada 15 minutos. Si detecta un video nuevo, envía un mensaje en el canal de Discord configurado con el título, el enlace y la mención al rol (si está configurado).
+</details>
 
 ---
 
-## Estructura del proyecto
+## 🏗️ Estructura del proyecto
 
 ```
 .
@@ -164,7 +189,7 @@ Una tarea en segundo plano sondea el RSS de cada canal suscrito cada 15 minutos.
 │   ├── db.py          # Capa de datos: aiosqlite, WAL mode, migraciones
 │   └── __init__.py
 ├── data/
-│   └── bot.db         # Base de datos SQLite (se crea al arrancar)
+│   └── bot.db         # Base de datos SQLite (generada al arrancar)
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
@@ -172,21 +197,24 @@ Una tarea en segundo plano sondea el RSS de cada canal suscrito cada 15 minutos.
 
 ---
 
-## Permisos del bot en Discord
+## 🔐 Permisos necesarios
 
-Al generar el enlace de invitación, incluye:
+Al generar el enlace de invitación en el **Developer Portal**:
 
-| Categoría | Valores |
+| Categoría | Valores requeridos |
 |---|---|
 | **OAuth2 Scopes** | `bot`, `applications.commands` |
-| **Permisos de bot** | `Read Messages`, `Send Messages`, `Read Message History`, `Add Reactions`, `Embed Links` |
-| **Intents privilegiados** | `Message Content Intent`, `Server Members Intent` |
+| **Permisos de bot** | `Read Messages` · `Send Messages` · `Read Message History` · `Add Reactions` · `Embed Links` |
+| **Intents privilegiados** | `Message Content Intent` · `Server Members Intent` |
 
 ---
 
-## Notas
+## 📝 Notas
 
-- Los slash commands se propagan globalmente en hasta 1 hora. Para verlos al instante durante el desarrollo, pon `GUILD_ID=<id>` en `.env`.
-- El modelo Markov necesita al menos **50 mensajes** en el corpus del servidor para generar respuestas, y **30** para `/imitar`.
-- Si los slash commands no aparecen, verifica que el bot esté invitado con el scope `applications.commands`.
-- La base de datos usa **modo WAL** para mejor concurrencia entre lecturas y escrituras asíncronas.
+> **Los slash commands tardan hasta 1 hora** en propagarse globalmente. Para verlos al instante en desarrollo, pon `GUILD_ID=<id>` en `.env`.
+
+> El modelo Markov necesita al menos **50 mensajes** en el corpus del servidor para generar respuestas, y **30** para `/imitar`.
+
+> La base de datos usa **modo WAL** para mejor concurrencia entre lecturas y escrituras asíncronas.
+
+> Si los slash commands no aparecen después de reiniciar, verifica que el bot esté invitado con el scope `applications.commands`.
