@@ -1,20 +1,24 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
 # Virtual environment
 .venv/
+venv/
 
 # Env files
 .env
 .env.*
 !.env.example
 
-# VS Code
+# Editor
 .vscode/
+.idea/
 
 # Database
 data/
+*.db
 
 # Logs
 *.log
@@ -25,12 +29,11 @@ data/
 .DS_Store
 Thumbs.db
 
-# Python bytecode
-*.pyo
-
-# Test coverage
+# Test / coverage
 .coverage
 htmlcov/
+.pytest_cache/
+.mypy_cache/
 
 # Distribution / packaging
 build/
@@ -41,8 +44,6 @@ dist/
 # Jupyter Notebooks
 .ipynb_checkpoints/
 
-# MyPy
-.mypy_cache/
-
-# Pytest
-.pytest_cache/
+# Graphify
+graphify-out/
+raw/
