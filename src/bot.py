@@ -238,7 +238,7 @@ def clean_for_corpus(text: str) -> str | None:
 
     t = " ".join(kept_lines)
     t = re.sub(r"\s+", " ", t).strip()
-    if len(t.split()) < 2:
+    if not t:
         return None
     return t
 
@@ -506,7 +506,7 @@ async def on_message(message: discord.Message):
     if not (mention_bot or reply_to_bot):
         if message.guild and auto_generate:
             try:
-                if random.random() < 0.35:
+                if random.random() < 0.45:
                     gif_url = await get_random_gif(message.guild.id)
                     if gif_url:
                         await message.channel.send(gif_url)
@@ -529,6 +529,12 @@ async def on_message(message: discord.Message):
         return
     if settings["channel_id"] and message.channel.id != settings["channel_id"]:
         return
+
+    if random.random() < 0.45:
+        gif_url = await get_random_gif(message.guild.id)
+        if gif_url:
+            await message.reply(gif_url)
+            return
 
     reply = await generate_markov_reply(message.guild.id)
     reply = post_process_reply(reply) if reply else "..."
