@@ -1,22 +1,23 @@
 import os
 import asyncio
+import logging
 import aiosqlite
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "bot.db")
 
-# Conexión global persistente
-_db: aiosqlite.Connection | None = None
+log = logging.getLogger(__name__)
 
-# Lock para serializar operaciones de escritura compuestas
+_db: aiosqlite.Connection | None = None
 _db_lock = asyncio.Lock()
 
+
 async def get_db() -> aiosqlite.Connection:
-    """Devuelve la conexión global. Debe llamarse después de init_db()."""
     if _db is None:
         raise RuntimeError("Base de datos no inicializada. Llama a init_db() primero.")
     return _db
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS user_corpus (
 );
 """
 
+
 async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
     """Asegura unicidad del corpus por (guild, channel, content).
 
@@ -71,27 +73,34 @@ async def _migrate_corpus_uniqueness(db: aiosqlite.Connection):
     agregar constraints UNIQUE a una tabla existente sin recrearla).
     Solo ejecuta el DELETE la primera vez; si el índice ya existe lo omite.
     """
-    async with db.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name='corpus_messages_unique_idx'"
-    ) as cur:
-        already_migrated = await cur.fetchone() is not None
+    async with _db_lock:
+        try:
+            async with db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='corpus_messages_unique_idx'"
+            ) as cur:
+                already_migrated = await cur.fetchone() is not None
 
-    if not already_migrated:
-        await db.execute(
-            "DELETE FROM corpus_messages "
-            "WHERE id NOT IN ("
-            "  SELECT MIN(id) FROM corpus_messages GROUP BY guild_id, channel_id, content"
-            ")"
-        )
+            if not already_migrated:
+                cur = await db.execute(
+                    "DELETE FROM corpus_messages "
+                    "WHERE id NOT IN ("
+                    "  SELECT MIN(id) FROM corpus_messages GROUP BY guild_id, channel_id, content"
+                    ")"
+                )
+                if cur.rowcount:
+                    log.info("Migración: eliminados %d duplicados de corpus_messages", cur.rowcount)
 
-    await db.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS corpus_messages_unique_idx "
-        "ON corpus_messages(guild_id, channel_id, content)"
-    )
-    await db.commit()
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS corpus_messages_unique_idx "
+                "ON corpus_messages(guild_id, channel_id, content)"
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Migración de unicidad falló")
+            raise
+
 
 async def init_db():
-    """Inicializa la conexión global y crea las tablas."""
     global _db
     if _db is not None:
         return
@@ -107,12 +116,11 @@ async def init_db():
         await _db.execute("ALTER TABLE youtube_subscriptions ADD COLUMN mention_role_id INTEGER")
         await _db.commit()
     except Exception:
-        pass
+        log.debug("Columna mention_role_id ya existe en youtube_subscriptions")
     await _db.commit()
 
 
 async def close_db():
-    """Cierra la conexión global. Llamar al apagar el bot."""
     global _db
     if _db is not None:
         await _db.close()
@@ -121,6 +129,7 @@ async def close_db():
 
 def _was_inserted(cursor: aiosqlite.Cursor) -> bool:
     return cursor.rowcount == 1
+
 
 # Settings helpers
 async def set_chat_mode(guild_id: int, enabled: bool, channel_id: int | None = None):
@@ -135,6 +144,7 @@ async def set_chat_mode(guild_id: int, enabled: bool, channel_id: int | None = N
             (guild_id, 1 if enabled else 0, channel_id),
         )
         await db.commit()
+
 
 async def get_chat_settings(guild_id: int):
     db = await get_db()
@@ -152,8 +162,6 @@ async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> b
     text = (content or "").strip()
     if not text:
         return False
-    if len(text.split()) <= 3:
-        return False
 
     db = await get_db()
     async with _db_lock:
@@ -166,6 +174,33 @@ async def save_corpus_message(guild_id: int, channel_id: int, content: str) -> b
     return inserted
 
 
+async def save_corpus_and_user_message(
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    author_name: str,
+    content: str,
+) -> tuple[bool, bool]:
+    text = (content or "").strip()
+    if not text:
+        return False, False
+
+    db = await get_db()
+    async with _db_lock:
+        cur1 = await db.execute(
+            "INSERT OR IGNORE INTO corpus_messages (guild_id, channel_id, content) VALUES (?, ?, ?)",
+            (guild_id, channel_id, text),
+        )
+        corpus_inserted = _was_inserted(cur1)
+        cur2 = await db.execute(
+            "INSERT OR IGNORE INTO user_corpus (guild_id, author_id, author_name, content) VALUES (?, ?, ?, ?)",
+            (guild_id, author_id, author_name, text),
+        )
+        user_inserted = _was_inserted(cur2)
+        await db.commit()
+    return corpus_inserted, user_inserted
+
+
 async def count_corpus_messages(guild_id: int, channel_id: int) -> int:
     db = await get_db()
     async with db.execute(
@@ -176,12 +211,20 @@ async def count_corpus_messages(guild_id: int, channel_id: int) -> int:
     return int(row[0] if row else 0)
 
 
-async def get_corpus_messages(guild_id: int, limit: int = 500) -> list[str]:
+async def get_corpus_messages(guild_id: int, limit: int | None = None) -> list[str]:
     db = await get_db()
-    async with db.execute(
-        "SELECT content FROM corpus_messages WHERE guild_id=? ORDER BY RANDOM() LIMIT ?",
-        (guild_id, limit),
-    ) as cursor:
+    if limit is None:
+        query = "SELECT content FROM corpus_messages WHERE guild_id=? ORDER BY RANDOM()"
+        params = (guild_id,)
+    else:
+        query = (
+            "SELECT content FROM corpus_messages "
+            "WHERE guild_id = ? AND id IN ("
+            "    SELECT id FROM corpus_messages WHERE guild_id = ? ORDER BY RANDOM() LIMIT ?"
+            ")"
+        )
+        params = (guild_id, guild_id, limit)
+    async with db.execute(query, params) as cursor:
         rows = await cursor.fetchall()
     return [r[0] for r in rows]
 
@@ -336,8 +379,6 @@ async def save_user_message(guild_id: int, author_id: int, author_name: str, con
     text = (content or "").strip()
     if not text:
         return False
-    if len(text.split()) <= 3:
-        return False
 
     db = await get_db()
     async with _db_lock:
@@ -350,12 +391,20 @@ async def save_user_message(guild_id: int, author_id: int, author_name: str, con
     return inserted
 
 
-async def get_user_messages(guild_id: int, author_id: int, limit: int = 300) -> list[str]:
+async def get_user_messages(guild_id: int, author_id: int, limit: int | None = None) -> list[str]:
     db = await get_db()
-    async with db.execute(
-        "SELECT content FROM user_corpus WHERE guild_id=? AND author_id=? ORDER BY RANDOM() LIMIT ?",
-        (guild_id, author_id, limit),
-    ) as cursor:
+    if limit is None:
+        query = "SELECT content FROM user_corpus WHERE guild_id=? AND author_id=? ORDER BY RANDOM()"
+        params = (guild_id, author_id)
+    else:
+        query = (
+            "SELECT content FROM user_corpus "
+            "WHERE guild_id = ? AND author_id = ? AND id IN ("
+            "    SELECT id FROM user_corpus WHERE guild_id = ? AND author_id = ? ORDER BY RANDOM() LIMIT ?"
+            ")"
+        )
+        params = (guild_id, author_id, guild_id, author_id, limit)
+    async with db.execute(query, params) as cursor:
         rows = await cursor.fetchall()
     return [r[0] for r in rows]
 

@@ -5,10 +5,12 @@ import regex
 import random
 import asyncio
 import hashlib
-import traceback
+import logging
 import requests
 import boto3
 import feedparser
+from collections import OrderedDict
+from logging.handlers import RotatingFileHandler
 from botocore.config import Config
 import markovify
 
@@ -21,7 +23,7 @@ from db import (
     close_db,
     set_chat_mode,
     get_chat_settings,
-    save_corpus_message,
+    save_corpus_and_user_message,
     get_corpus_messages,
     count_corpus_messages,
     wipe_corpus,
@@ -34,7 +36,6 @@ from db import (
     get_all_youtube_subs,
     update_last_video_id,
     set_youtube_mention_role,
-    save_user_message,
     get_user_messages,
     count_user_messages,
 )
@@ -45,8 +46,24 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().lower() in ("1", "true", "yes")
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 
+# Configurar logging
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOG_PATH = os.path.join(_BASE_DIR, "data", "bot.log")
+os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+
+_fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+_fh = RotatingFileHandler(_LOG_PATH, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+_fh.setFormatter(_fmt)
+_sh = logging.StreamHandler()
+_sh.setFormatter(_fmt)
+logging.basicConfig(level=logging.INFO, handlers=[_fh, _sh])
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("discord.http").setLevel(logging.WARNING)
+
+log = logging.getLogger(__name__)
+
 if not TOKEN:
-    print("[ERROR] Falta DISCORD_TOKEN en .env. Copia .env.example a .env y pon tu token.")
+    log.critical("Falta DISCORD_TOKEN en .env. Copia .env.example a .env y pon tu token.")
     sys.exit(1)
 
 # Configurar intents
@@ -58,11 +75,31 @@ _CONECTORES_FINALES = [
     " y", " o", " con", " pero", " de", " para", " a", " que", " entonces", " como"
 ]
 
-_markov_cache: dict[int, markovify.Text] = {}
-_message_counter: dict[tuple[int, int], int] = {}
-_corpus_insert_counter: dict[tuple[int, int], int] = {}
-_user_markov_cache: dict[tuple[int, int], markovify.Text] = {}
-_user_corpus_insert_counter: dict[tuple[int, int], int] = {}
+
+class _LRUDict(OrderedDict):
+    def __init__(self, maxsize: int):
+        super().__init__()
+        self._maxsize = maxsize
+
+    def get(self, key, default=None):
+        if key not in self:
+            return default
+        self.move_to_end(key)
+        return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
+_markov_cache: _LRUDict = _LRUDict(64)
+_message_counter: _LRUDict = _LRUDict(256)
+_corpus_insert_counter: _LRUDict = _LRUDict(256)
+_user_markov_cache: _LRUDict = _LRUDict(64)
+_user_corpus_insert_counter: _LRUDict = _LRUDict(256)
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
 _REFEED_MAX_MESSAGES = 20_000
@@ -105,15 +142,18 @@ def _note_user_corpus_insert(guild_id: int, author_id: int) -> None:
     else:
         _user_corpus_insert_counter[key] = n
 
+
 # 1. BOT CUSTOM PARA CIERRE LIMPIO DE BASE DE DATOS
 class MyCustomBot(commands.Bot):
     async def close(self):
-        print("[INFO] Cerrando conexión a la base de datos...")
+        log.info("Cerrando conexión a la base de datos...")
         await close_db()
         await super().close()
 
+
 bot = MyCustomBot(command_prefix="!", intents=intents)
 bot.remove_command("help")
+
 
 # --- UTILIDADES ---
 def chunk_message(text: str, max_length: int = 1900) -> list[str]:
@@ -134,7 +174,9 @@ def chunk_message(text: str, max_length: int = 1900) -> list[str]:
         text = text[cut_index:].strip()
     return chunks
 
+
 _EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', regex.UNICODE)
+
 
 # Frases que delatan a la IA "asistente"
 def post_process_reply(text: str) -> str:
@@ -162,6 +204,7 @@ def post_process_reply(text: str) -> str:
         text = "no sé xd"
 
     return text.strip()
+
 
 _ANSI_ESCAPE_RE = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
 _ANSI_BRACKET_RE = re.compile(r'\]\d*;[^\]]*')
@@ -195,7 +238,7 @@ def clean_for_corpus(text: str) -> str | None:
 
     t = " ".join(kept_lines)
     t = re.sub(r"\s+", " ", t).strip()
-    if len(t.split()) < 4:
+    if len(t.split()) < 2:
         return None
     return t
 
@@ -205,7 +248,7 @@ async def build_markov_model(guild_id: int) -> markovify.Text | None:
     if cached is not None:
         return cached
 
-    corpus = await get_corpus_messages(guild_id, limit=500)
+    corpus = await get_corpus_messages(guild_id)
     if len(corpus) < 50:
         return None
 
@@ -213,6 +256,7 @@ async def build_markov_model(guild_id: int) -> markovify.Text | None:
     try:
         model = await asyncio.to_thread(markovify.Text, text, state_size=1, well_formed=False)
     except Exception:
+        log.exception("Error construyendo modelo Markov para guild %s", guild_id)
         return None
 
     _markov_cache[guild_id] = model
@@ -227,6 +271,7 @@ async def generate_markov_reply(guild_id: int) -> str | None:
     try:
         sentence = model.make_short_sentence(max_chars=60, tries=50)
     except Exception:
+        log.exception("Error generando frase Markov para guild %s", guild_id)
         sentence = None
 
     if sentence:
@@ -238,19 +283,21 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
     key = (guild_id, author_id)
     model = _user_markov_cache.get(key)
     if model is None:
-        corpus = await get_user_messages(guild_id, author_id, limit=300)
+        corpus = await get_user_messages(guild_id, author_id)
         if len(corpus) < 30:
             return None
         text = "\n".join(corpus)
         try:
             model = await asyncio.to_thread(markovify.Text, text, state_size=1, well_formed=False)
         except Exception:
+            log.exception("Error construyendo modelo Markov para usuario %s", author_id)
             return None
         _user_markov_cache[key] = model
 
     try:
         sentence = model.make_short_sentence(max_chars=80, tries=50)
     except Exception:
+        log.exception("Error generando frase Markov para usuario %s", author_id)
         sentence = None
     return sentence if sentence else None
 
@@ -260,7 +307,7 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code != 200:
-            print(f"[R2 ERROR] HTTP {resp.status_code} al descargar {url}")
+            log.error("HTTP %s al descargar GIF para R2: %s", resp.status_code, url)
             return None
         data = resp.content
         key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}.gif"
@@ -272,9 +319,8 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         )
         return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
     except Exception:
-        print(f"[R2 ERROR] {traceback.format_exc()}")
+        log.exception("Error subiendo GIF a R2: %s", url)
         return None
-
 
 
 # --- EVENTOS PRINCIPALES ---
@@ -295,17 +341,19 @@ async def get_latest_video(youtube_channel_id: str) -> dict | None:
             "author": entry.get("author", ""),
         }
     except Exception:
+        log.exception("Error obteniendo RSS para canal YouTube %s", youtube_channel_id)
         return None
 
 
 @tasks.loop(minutes=15)
 async def check_youtube():
     subs = await get_all_youtube_subs()
-    for sub in subs:
+
+    async def _check_one(sub: dict) -> None:
         try:
             video = await get_latest_video(sub["youtube_channel_id"])
             if video is None:
-                continue
+                return
             if video["id"] != sub["last_video_id"]:
                 channel = bot.get_channel(sub["discord_channel_id"])
                 if channel and isinstance(channel, discord.TextChannel):
@@ -317,8 +365,10 @@ async def check_youtube():
                         f"**{video['title']}**\n{video['url']}"
                     )
                     await update_last_video_id(sub["guild_id"], sub["youtube_channel_id"], video["id"])
-        except Exception as e:
-            print(f"[YouTube] Error procesando {sub['youtube_channel_id']}: {e}")
+        except Exception:
+            log.exception("Error procesando suscripción YouTube %s", sub["youtube_channel_id"])
+
+    await asyncio.gather(*(_check_one(sub) for sub in subs))
 
 
 @bot.event
@@ -328,23 +378,24 @@ async def on_ready():
         check_youtube.start()
 
     try:
-        print("--- Iniciando Sincronización de Comandos ---")
+        log.info("Iniciando sincronización de comandos")
 
         if GUILD_ID_ENV:
             # Sync instantáneo a un servidor específico (desarrollo)
             guild_obj = discord.Object(id=int(GUILD_ID_ENV))
             bot.tree.copy_global_to(guild=guild_obj)
             synced = await bot.tree.sync(guild=guild_obj)
-            print(f"✅ Sync al servidor {GUILD_ID_ENV}: {[c.name for c in synced]}")
+            log.info("Sync al servidor %s: %s", GUILD_ID_ENV, [c.name for c in synced])
         else:
             # Sync global (puede tardar hasta 1 hora en propagarse)
             synced = await bot.tree.sync()
-            print(f"✅ Sync global: {[c.name for c in synced]}")
+            log.info("Sync global: %s", [c.name for c in synced])
 
-    except Exception as e:
-        print(f"❌ Error en la sincronización: {e}")
+    except Exception:
+        log.exception("Error en la sincronización de comandos")
 
-    print(f"🚀 Bot listo como {bot.user}")
+    log.info("Bot listo como %s", bot.user)
+
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
@@ -356,13 +407,14 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"⚠️ Faltan argumentos. Revisa cómo usar el comando.")
         return
-    print(f"[ERROR Comando] {getattr(ctx, 'command', None)}: {error}")
+    log.error("Error en comando %s", getattr(ctx, "command", None), exc_info=error)
+
 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-        
+
     # 1. Procesar comandos básicos (!ping, !chat)
     await bot.process_commands(message)
     if (message.content or "").strip().startswith("!"):
@@ -382,7 +434,7 @@ async def on_message(message: discord.Message):
                             url = r2_url
                     await save_gif_url(message.guild.id, url)
                 except Exception:
-                    pass
+                    log.exception("Error guardando GIF de mensaje: %s", m.group(0))
 
         for attachment in message.attachments:
             if attachment.url and (
@@ -397,13 +449,15 @@ async def on_message(message: discord.Message):
                             url = r2_url
                     await save_gif_url(message.guild.id, url)
                 except Exception:
-                    pass
+                    log.exception("Error guardando GIF adjunto: %s", attachment.url)
 
         cleaned = clean_for_corpus(message.content or "")
         inserted = False
         if cleaned is not None:
-            inserted = await save_corpus_message(message.guild.id, message.channel.id, cleaned)
-            user_inserted = await save_user_message(message.guild.id, message.author.id, message.author.display_name, cleaned)
+            inserted, user_inserted = await save_corpus_and_user_message(
+                message.guild.id, message.channel.id,
+                message.author.id, message.author.display_name, cleaned,
+            )
             if user_inserted:
                 _note_user_corpus_insert(message.guild.id, message.author.id)
         if inserted:
@@ -421,7 +475,7 @@ async def on_message(message: discord.Message):
                 if emojis:
                     await message.add_reaction(random.choice(emojis))
             except Exception:
-                pass
+                log.exception("Error añadiendo reacción emoji")
 
     # 2. Verificar si el bot fue mencionado o si le respondieron a él directamente
     mention_bot = bool(bot.user and bot.user.id in (message.raw_mentions or []))
@@ -445,12 +499,12 @@ async def on_message(message: discord.Message):
                     for chunk in chunk_message(reply):
                         await message.channel.send(chunk)
             except Exception:
-                pass
+                log.exception("Error en generación automática de respuesta")
         return
 
     if not message.guild:
         return
-        
+
     # 3. Respetar restricciones de canal y modo de chat
     settings = await get_chat_settings(message.guild.id)
     if not settings["enabled"]:
@@ -517,7 +571,7 @@ async def refeed_slash(interaction: discord.Interaction):
                                 url = r2_url
                         await save_gif_url(interaction.guild.id, url)
                     except Exception:
-                        pass
+                        log.exception("Error procesando GIF en refeed: %s", m.group(0))
 
             for attachment in msg.attachments:
                 if attachment.url and (
@@ -532,15 +586,19 @@ async def refeed_slash(interaction: discord.Interaction):
                                 url = r2_url
                         await save_gif_url(interaction.guild.id, url)
                     except Exception:
-                        pass
+                        log.exception("Error procesando GIF adjunto en refeed: %s", attachment.url)
 
             cleaned = clean_for_corpus(msg.content or "")
             if cleaned is None:
                 continue
-            if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
+            corpus_ins, user_ins = await save_corpus_and_user_message(
+                interaction.guild.id, msg.channel.id,
+                msg.author.id, msg.author.display_name, cleaned,
+            )
+            if corpus_ins:
                 saved += 1
                 _note_corpus_insert(interaction.guild.id, msg.channel.id)
-            if await save_user_message(interaction.guild.id, msg.author.id, msg.author.display_name, cleaned):
+            if user_ins:
                 _note_user_corpus_insert(interaction.guild.id, msg.author.id)
 
         last_msg_id = batch[-1].id
@@ -572,17 +630,17 @@ async def refeed_all_slash(interaction: discord.Interaction):
 
     total_saved = 0
     total_fetched = 0
+    any_channel_hit_limit = False
 
     for channel in interaction.guild.text_channels:
-        if total_fetched >= _REFEED_MAX_MESSAGES:
-            break
         perms = channel.permissions_for(me)
         if not (perms.read_messages and perms.read_message_history):
             continue
 
         saved = 0
+        channel_fetched = 0
         last_msg_id: int | None = None
-        while total_fetched < _REFEED_MAX_MESSAGES:
+        while channel_fetched < _REFEED_MAX_MESSAGES:
             before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
             try:
                 batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
@@ -590,7 +648,9 @@ async def refeed_all_slash(interaction: discord.Interaction):
                 break
             if not batch:
                 break
-            total_fetched += len(batch)
+            batch_len = len(batch)
+            channel_fetched += batch_len
+            total_fetched += batch_len
 
             for msg in batch:
                 if msg.author.bot:
@@ -606,7 +666,7 @@ async def refeed_all_slash(interaction: discord.Interaction):
                                     url = r2_url
                             await save_gif_url(interaction.guild.id, url)
                         except Exception:
-                            pass
+                            log.exception("Error procesando GIF en refeed_all: %s", m.group(0))
 
                 for attachment in msg.attachments:
                     if attachment.url and (
@@ -621,23 +681,29 @@ async def refeed_all_slash(interaction: discord.Interaction):
                                     url = r2_url
                             await save_gif_url(interaction.guild.id, url)
                         except Exception:
-                            pass
+                            log.exception("Error procesando GIF adjunto en refeed_all: %s", attachment.url)
 
                 cleaned = clean_for_corpus(msg.content or "")
                 if cleaned is None:
                     continue
-                if await save_corpus_message(interaction.guild.id, msg.channel.id, cleaned):
+                corpus_ins, user_ins = await save_corpus_and_user_message(
+                    interaction.guild.id, msg.channel.id,
+                    msg.author.id, msg.author.display_name, cleaned,
+                )
+                if corpus_ins:
                     saved += 1
                     _note_corpus_insert(interaction.guild.id, msg.channel.id)
-                if await save_user_message(interaction.guild.id, msg.author.id, msg.author.display_name, cleaned):
+                if user_ins:
                     _note_user_corpus_insert(interaction.guild.id, msg.author.id)
 
             last_msg_id = batch[-1].id
 
+        if channel_fetched >= _REFEED_MAX_MESSAGES:
+            any_channel_hit_limit = True
         total_saved += saved
 
     result = f"✅ Refeed_all completado. Total guardado: {total_saved} mensajes."
-    if total_fetched >= _REFEED_MAX_MESSAGES:
+    if any_channel_hit_limit:
         result += f"\n⚠️ Límite de {_REFEED_MAX_MESSAGES:,} mensajes leídos alcanzado; algunos canales pueden estar incompletos."
     await interaction.followup.send(result)
 
@@ -918,5 +984,5 @@ if __name__ == "__main__":
     try:
         bot.run(TOKEN)
     except discord.errors.LoginFailure:
-        print("[ERROR] Token inválido. Verifica DISCORD_TOKEN en .env.")
+        log.critical("Token inválido. Verifica DISCORD_TOKEN en .env.")
         sys.exit(1)
