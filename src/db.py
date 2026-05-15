@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS user_corpus (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(guild_id, message_id)
 );
+
+CREATE TABLE IF NOT EXISTS ignored_channels (
+    guild_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+);
 """
 
 
@@ -385,3 +391,47 @@ async def count_user_messages(guild_id: int, author_id: int) -> int:
     ) as cursor:
         row = await cursor.fetchone()
     return int(row[0] if row else 0)
+
+
+async def add_ignored_channel(guild_id: int, channel_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO ignored_channels (guild_id, channel_id) VALUES (?, ?)",
+            (guild_id, channel_id),
+        )
+        inserted = _was_inserted(cursor)
+        await db.commit()
+    return inserted
+
+
+async def remove_ignored_channel(guild_id: int, channel_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM ignored_channels WHERE guild_id=? AND channel_id=?",
+            (guild_id, channel_id),
+        )
+        removed = cursor.rowcount > 0
+        await db.commit()
+    return removed
+
+
+async def list_ignored_channels(guild_id: int) -> list[int]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT channel_id FROM ignored_channels WHERE guild_id=? ORDER BY channel_id",
+        (guild_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
+async def is_channel_ignored(guild_id: int, channel_id: int) -> bool:
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM ignored_channels WHERE guild_id=? AND channel_id=? LIMIT 1",
+        (guild_id, channel_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row is not None

@@ -38,6 +38,10 @@ from db import (
     set_youtube_mention_role,
     get_user_messages,
     count_user_messages,
+    add_ignored_channel,
+    remove_ignored_channel,
+    list_ignored_channels,
+    is_channel_ignored,
 )
 
 # Cargar variables de entorno
@@ -440,6 +444,9 @@ async def on_message(message: discord.Message):
     auto_generate = False
 
     if message.guild:
+        if await is_channel_ignored(message.guild.id, message.channel.id):
+            return
+
         # Guardar GIFs (tenor/giphy) si aparecen en el mensaje
         if message.content:
             for m in _GIF_RE.finditer(message.content):
@@ -566,6 +573,10 @@ async def refeed_slash(interaction: discord.Interaction):
         await interaction.followup.send("No puedo leer el historial de este canal.")
         return
 
+    if await is_channel_ignored(interaction.guild.id, channel.id):
+        await interaction.followup.send("⚠️ Este canal está en la lista de ignorados. Usa `/corpus_ignorar quitar` primero si querés incluirlo.")
+        return
+
     saved = 0
     fetched = 0
 
@@ -660,6 +671,8 @@ async def refeed_all_slash(interaction: discord.Interaction):
     for channel in interaction.guild.text_channels:
         perms = channel.permissions_for(me)
         if not (perms.read_messages and perms.read_message_history):
+            continue
+        if await is_channel_ignored(interaction.guild.id, channel.id):
             continue
 
         saved = 0
@@ -1004,6 +1017,66 @@ async def imitar_slash(interaction: discord.Interaction, usuario: discord.Member
         return
 
     await interaction.followup.send(f'🎭 **{usuario.display_name}** diría: "{result}"')
+
+
+_corpus_ignorar = app_commands.Group(
+    name="corpus_ignorar",
+    description="Gestiona los canales que el bot ignora completamente",
+)
+
+
+@_corpus_ignorar.command(name="add", description="Añade un canal a la lista de ignorados.")
+@app_commands.describe(canal="Canal que el bot debe ignorar")
+async def corpus_ignorar_add(interaction: discord.Interaction, canal: discord.TextChannel):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    added = await add_ignored_channel(interaction.guild.id, canal.id)
+    if added:
+        await interaction.response.send_message(f"✅ {canal.mention} añadido a la lista de ignorados.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ {canal.mention} ya estaba en la lista de ignorados.", ephemeral=True)
+
+
+@_corpus_ignorar.command(name="quitar", description="Quita un canal de la lista de ignorados.")
+@app_commands.describe(canal="Canal que el bot debe dejar de ignorar")
+async def corpus_ignorar_quitar(interaction: discord.Interaction, canal: discord.TextChannel):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    removed = await remove_ignored_channel(interaction.guild.id, canal.id)
+    if removed:
+        await interaction.response.send_message(f"✅ {canal.mention} quitado de la lista de ignorados.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ {canal.mention} no estaba en la lista de ignorados.", ephemeral=True)
+
+
+@_corpus_ignorar.command(name="lista", description="Muestra los canales que el bot ignora actualmente.")
+async def corpus_ignorar_lista(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    channel_ids = await list_ignored_channels(interaction.guild.id)
+    if not channel_ids:
+        await interaction.response.send_message("ℹ️ No hay canales ignorados.", ephemeral=True)
+        return
+    lines = [f"• <#{cid}>" for cid in channel_ids]
+    await interaction.response.send_message(
+        "**Canales ignorados:**\n" + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
+bot.tree.add_command(_corpus_ignorar)
 
 
 if __name__ == "__main__":
