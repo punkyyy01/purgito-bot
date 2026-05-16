@@ -79,14 +79,6 @@ CREATE TABLE IF NOT EXISTS meme_schedule (
     last_posted_at TEXT,
     PRIMARY KEY (guild_id, channel_id)
 );
-
-CREATE TABLE IF NOT EXISTS corpus_images (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    url TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(guild_id, url)
-);
 """
 
 
@@ -512,40 +504,3 @@ async def update_meme_last_posted(guild_id: int, channel_id: int) -> None:
             (guild_id, channel_id),
         )
         await db.commit()
-
-
-async def save_image_url(guild_id: int, url: str) -> bool:
-    """Guarda URL de imagen del server. Retorna True si fue insertada."""
-    u = (url or "").strip()
-    if not u:
-        return False
-    db = await get_db()
-    async with _db_lock:
-        cursor = await db.execute(
-            "INSERT OR IGNORE INTO corpus_images (guild_id, url) VALUES (?, ?)",
-            (guild_id, u),
-        )
-        inserted = _was_inserted(cursor)
-        await db.commit()
-    return inserted
-
-
-async def get_random_image_url(guild_id: int) -> str | None:
-    """Retorna una URL de imagen random del pool del server."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT url FROM corpus_images WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
-        (guild_id,),
-    ) as cursor:
-        row = await cursor.fetchone()
-    return row[0] if row else None
-
-
-async def count_image_urls(guild_id: int) -> int:
-    db = await get_db()
-    async with db.execute(
-        "SELECT COUNT(*) FROM corpus_images WHERE guild_id=?",
-        (guild_id,),
-    ) as cursor:
-        row = await cursor.fetchone()
-    return int(row[0] if row else 0)

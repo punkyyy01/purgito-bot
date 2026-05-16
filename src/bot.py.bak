@@ -50,9 +50,6 @@ from db import (
     list_meme_schedules,
     get_due_meme_schedules,
     update_meme_last_posted,
-    save_image_url,
-    get_random_image_url,
-    count_image_urls,
 )
 
 # Cargar variables de entorno
@@ -60,7 +57,6 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().lower() in ("1", "true", "yes")
 GUILD_ID_ENV = os.getenv("GUILD_ID")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # Configurar logging
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -128,9 +124,6 @@ _r2_client = boto3.client(
     config=Config(signature_version="s3v4"),
     region_name="auto",
 )
-
-from groq import AsyncGroq
-_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 ALLOWED_ROLE_IDS = {1434103563746803801, 1434103563700666401}
 
@@ -490,96 +483,6 @@ async def check_youtube():
     await asyncio.gather(*(_check_one(sub) for sub in subs))
 
 
-async def generate_groq_meme_caption(
-    image_bytes: bytes,
-    corpus_sample: list[str],
-) -> str | None:
-    """
-    Llama a Groq Vision para generar un caption de meme.
-    Paso 1: describe la imagen.
-    Paso 2: genera el caption usando la descripción + muestra del corpus.
-    Retorna el caption o None si falla.
-    """
-    if not _groq_client:
-        log.warning("GROQ_API_KEY no configurada")
-        return None
-
-    import base64
-    image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-
-    # Paso 1: describir la imagen
-    try:
-        vision_response = await _groq_client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Describe this image briefly in 1-2 sentences. "
-                                "Focus on what's happening, the mood, and any "
-                                "notable elements. Be direct, no preamble."
-                            ),
-                        },
-                    ],
-                }
-            ],
-            max_tokens=150,
-        )
-        image_description = vision_response.choices[0].message.content.strip()
-    except Exception:
-        log.exception("Error en Groq Vision paso 1 (descripción)")
-        return None
-
-    # Paso 2: generar caption con contexto del server
-    corpus_text = "\n".join(f"- {msg}" for msg in corpus_sample[:100])
-    system_prompt = (
-        "You are a meme caption generator for a specific Discord server. "
-        "Your job is to write a SHORT, FUNNY meme caption (maximum 80 characters) "
-        "that fits the image described. "
-        "The caption must sound EXACTLY like the server members talk — "
-        "use their vocabulary, their humor style, their expressions. "
-        "Be irreverent, unfiltered, and funny. No corporate speak. "
-        "Respond with ONLY the caption text, nothing else. "
-        "No quotes, no explanation, just the caption."
-    )
-    user_prompt = (
-        f"Image description: {image_description}\n\n"
-        f"Here are real messages from the server members "
-        f"(use their style and vocabulary):\n"
-        f"{corpus_text}\n\n"
-        f"Write a meme caption for this image that sounds like these people wrote it. "
-        f"Maximum 80 characters. Only the caption, nothing else."
-    )
-
-    try:
-        caption_response = await _groq_client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=60,
-            temperature=0.9,
-        )
-        caption = caption_response.choices[0].message.content.strip()
-        caption = caption.strip('"').strip("'").strip()
-        if len(caption) > 80:
-            caption = caption[:80].rsplit(" ", 1)[0].strip()
-        return caption if caption else None
-    except Exception:
-        log.exception("Error en Groq Vision paso 2 (caption)")
-        return None
-
-
 @tasks.loop(minutes=10)
 async def auto_meme_task():
     schedules = await get_due_meme_schedules()
@@ -589,76 +492,39 @@ async def auto_meme_task():
             if not channel or not isinstance(channel, discord.TextChannel):
                 continue
 
-            # Obtener imagen random del pool del server
-            image_url = await get_random_image_url(schedule["guild_id"])
-            if not image_url:
-                log.info(
-                    "auto_meme: sin imágenes en pool para guild %s",
-                    schedule["guild_id"]
-                )
-                continue
-
-            # Descargar imagen
-            try:
-                img_resp = await asyncio.to_thread(
-                    __import__("requests").get,
-                    image_url,
-                    timeout=15,
-                )
-                if img_resp.status_code != 200:
-                    log.warning("auto_meme: no se pudo descargar imagen %s", image_url)
+            img_bytes = None
+            async for msg in channel.history(limit=200):
+                if msg.author.bot:
                     continue
-                img_bytes = img_resp.content
-            except Exception:
-                log.exception("auto_meme: error descargando imagen %s", image_url)
-                continue
-
-            if len(img_bytes) > _MEME_MAX_BYTES:
-                continue
-
-            # Obtener muestra de 100 mensajes random del corpus
-            corpus_sample = await get_corpus_messages(
-                schedule["guild_id"], limit=100
-            )
-            if not corpus_sample:
-                log.info(
-                    "auto_meme: corpus vacío para guild %s",
-                    schedule["guild_id"]
+                att = next(
+                    (a for a in msg.attachments
+                     if os.path.splitext(a.filename.lower())[1] in _IMAGE_EXTS),
+                    None,
                 )
+                if att and att.size <= _MEME_MAX_BYTES:
+                    try:
+                        img_bytes = await att.read()
+                        break
+                    except Exception:
+                        continue
+
+            if not img_bytes:
                 continue
 
-            # Generar caption con Groq
-            if _groq_client:
-                caption = await generate_groq_meme_caption(img_bytes, corpus_sample)
-            else:
-                # Fallback a Markov si no hay Groq configurado
-                model = await build_markov_model(schedule["guild_id"])
-                caption = await asyncio.to_thread(
-                    _try_short_sentence, model
-                ) if model and not model.is_empty else None
-
-            if not caption:
-                log.info("auto_meme: no se generó caption para guild %s", schedule["guild_id"])
+            model = await build_markov_model(schedule["guild_id"])
+            if not model or model.is_empty:
                 continue
 
-            # Renderizar y postear
-            meme_bytes = await asyncio.to_thread(render_meme, img_bytes, caption)
-            await channel.send(
-                file=discord.File(io.BytesIO(meme_bytes), filename="meme.png")
-            )
-            await update_meme_last_posted(
-                schedule["guild_id"], schedule["channel_id"]
-            )
-            log.info(
-                "auto_meme: meme posteado en canal %s con caption: %s",
-                schedule["channel_id"], caption
-            )
+            text = await asyncio.to_thread(_try_short_sentence, model)
+            if not text:
+                continue
+
+            meme_bytes = await asyncio.to_thread(render_meme, img_bytes, text)
+            await channel.send(file=discord.File(io.BytesIO(meme_bytes), filename="meme.png"))
+            await update_meme_last_posted(schedule["guild_id"], schedule["channel_id"])
 
         except Exception:
-            log.exception(
-                "auto_meme: error inesperado para canal %s",
-                schedule["channel_id"]
-            )
+            log.exception("Error en auto_meme_task para canal %s", schedule["channel_id"])
 
 
 @bot.event
@@ -749,14 +615,6 @@ async def on_message(message: discord.Message):
                     await save_gif_url(message.guild.id, url)
                 except Exception:
                     log.exception("Error guardando GIF adjunto: %s", attachment.url)
-
-        for attachment in message.attachments:
-            ext = os.path.splitext(attachment.filename.lower())[1]
-            if ext in {".png", ".jpg", ".jpeg", ".webp"} and attachment.size <= _MEME_MAX_BYTES:
-                try:
-                    await save_image_url(message.guild.id, attachment.url)
-                except Exception:
-                    log.exception("Error guardando imagen en corpus: %s", attachment.url)
 
         cleaned = clean_for_corpus(message.content or "")
         inserted = False
