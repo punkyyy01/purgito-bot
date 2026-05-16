@@ -351,25 +351,42 @@ _MEME_MAX_BYTES = 10 * 1024 * 1024
 
 
 async def handle_meme_command(message: discord.Message) -> None:
+    log.info(
+        "handle_meme_command: message_id=%s content=%r has_reference=%s ref_message_id=%s",
+        message.id,
+        message.content,
+        message.reference is not None,
+        message.reference.message_id if message.reference else None,
+    )
+
     if not message.reference or not message.reference.message_id:
+        log.info("handle_meme_command: no es reply, ignorando")
         return
 
     ref = message.reference.resolved
     if ref is None or isinstance(ref, discord.DeletedReferencedMessage):
+        log.info("handle_meme_command: ref no resuelto, haciendo fetch de message_id=%s", message.reference.message_id)
         try:
             ref = await message.channel.fetch_message(message.reference.message_id)
         except Exception:
+            log.info("handle_meme_command: fetch del mensaje referenciado falló, ignorando")
             return
     if not isinstance(ref, discord.Message):
+        log.info("handle_meme_command: ref es %s (no es Message válido), ignorando", type(ref).__name__)
         return
+
+    log.info("handle_meme_command: ref resuelto OK, message_id=%s, attachments=%d", ref.id, len(ref.attachments))
 
     image_att = next(
         (a for a in ref.attachments if os.path.splitext(a.filename.lower())[1] in _IMAGE_EXTS),
         None,
     )
     if image_att is None:
+        log.info("handle_meme_command: no se encontró attachment de imagen en el mensaje referenciado")
         await message.reply("necesito una imagen pa generar el momo")
         return
+
+    log.info("handle_meme_command: imagen encontrada filename=%r size=%d bytes", image_att.filename, image_att.size)
 
     if image_att.size > _MEME_MAX_BYTES:
         await message.reply("la imagen pesa mucho")
@@ -383,15 +400,20 @@ async def handle_meme_command(message: discord.Message) -> None:
         return
 
     if not message.guild:
+        log.info("handle_meme_command: mensaje fuera de guild, no hay modelo Markov disponible")
         await message.reply("no me salio nada, intenta de nuevo")
         return
 
     model = await build_markov_model(message.guild.id)
     if not model or model.is_empty:
+        log.info("handle_meme_command: modelo Markov no disponible (model=%s is_empty=%s)", model, model.is_empty if model else "N/A")
         await message.reply("no me salio nada, intenta de nuevo")
         return
 
+    log.info("handle_meme_command: modelo Markov OK, generando texto")
+
     text = await asyncio.to_thread(_try_short_sentence, model)
+    log.info("handle_meme_command: texto generado=%r", text)
     if not text:
         await message.reply("no me salio nada, intenta de nuevo")
         return
