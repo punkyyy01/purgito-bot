@@ -28,6 +28,7 @@ from db import (
     get_chat_settings,
     save_corpus_and_user_message,
     get_corpus_messages,
+    get_corpus_messages_filtered,
     count_corpus_messages,
     wipe_corpus,
     save_gif_url,
@@ -617,8 +618,8 @@ async def auto_meme_task():
                 continue
 
             # Obtener muestra de 100 mensajes random del corpus
-            corpus_sample = await get_corpus_messages(
-                schedule["guild_id"], limit=100
+            corpus_sample = await get_corpus_messages_filtered(
+                schedule["guild_id"], min_words=5, limit=300
             )
             if not corpus_sample:
                 log.info(
@@ -1482,7 +1483,7 @@ async def meme_test_slash(interaction: discord.Interaction):
             await interaction.followup.send("La imagen pesa mucho.", ephemeral=True)
             return
 
-        corpus_sample = await get_corpus_messages(interaction.guild.id, limit=100)
+        corpus_sample = await get_corpus_messages_filtered(interaction.guild.id, min_words=5, limit=300)
         if not corpus_sample:
             await interaction.followup.send("El corpus está vacío.", ephemeral=True)
             return

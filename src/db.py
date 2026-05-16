@@ -219,6 +219,28 @@ async def get_corpus_messages(guild_id: int, limit: int | None = None) -> list[s
     return [r[0] for r in rows]
 
 
+async def get_corpus_messages_filtered(
+    guild_id: int,
+    min_words: int = 5,
+    limit: int = 300,
+) -> list[str]:
+    db = await get_db()
+    query = (
+        "SELECT content FROM corpus_messages "
+        "WHERE guild_id = ? "
+        "AND (length(content) - length(replace(content, ' ', ''))) >= ? "
+        "AND id IN ("
+        "    SELECT id FROM corpus_messages "
+        "    WHERE guild_id = ? "
+        "    AND (length(content) - length(replace(content, ' ', ''))) >= ? "
+        "    ORDER BY RANDOM() LIMIT ?"
+        ")"
+    )
+    async with db.execute(query, (guild_id, min_words - 1, guild_id, min_words - 1, limit)) as cursor:
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
 async def wipe_corpus(guild_id: int) -> None:
     db = await get_db()
     async with _db_lock:
