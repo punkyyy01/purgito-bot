@@ -1452,10 +1452,6 @@ bot.tree.add_command(_meme_auto)
 
 @bot.tree.command(name="meme_test", description="Genera un meme ahora mismo (test).")
 async def meme_test_slash(interaction: discord.Interaction):
-    if not has_allowed_role(interaction):
-        await interaction.response.send_message("❌ Sin permisos.", ephemeral=True)
-        return
-
     await interaction.response.defer(ephemeral=True)
 
     if not interaction.guild:
