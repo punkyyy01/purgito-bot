@@ -1452,7 +1452,7 @@ bot.tree.add_command(_meme_auto)
 
 @bot.tree.command(name="meme_test", description="Genera un meme ahora mismo (test).")
 async def meme_test_slash(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
 
     if not interaction.guild:
         await interaction.followup.send("Solo en servidores.", ephemeral=True)
@@ -1499,10 +1499,9 @@ async def meme_test_slash(interaction: discord.Interaction):
             return
 
         meme_bytes = await asyncio.to_thread(render_meme, img_bytes, caption)
-        await interaction.channel.send(
+        await interaction.followup.send(
             file=discord.File(io.BytesIO(meme_bytes), filename="meme.png")
         )
-        await interaction.followup.send("✅ Meme generado.", ephemeral=True)
 
     except Exception:
         log.exception("meme_test: error inesperado")
