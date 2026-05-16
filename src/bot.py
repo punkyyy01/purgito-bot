@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 import re
@@ -13,6 +14,7 @@ from collections import OrderedDict
 from logging.handlers import RotatingFileHandler
 from botocore.config import Config
 from markov_engine import SimpleMarkov
+from meme_generator import render_meme, _try_short_sentence
 
 import discord
 from discord import app_commands
@@ -344,6 +346,66 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         return None
 
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_MEME_MAX_BYTES = 10 * 1024 * 1024
+
+
+async def handle_meme_command(message: discord.Message) -> None:
+    if not message.reference or not message.reference.message_id:
+        return
+
+    ref = message.reference.resolved
+    if ref is None or isinstance(ref, discord.DeletedReferencedMessage):
+        try:
+            ref = await message.channel.fetch_message(message.reference.message_id)
+        except Exception:
+            return
+    if not isinstance(ref, discord.Message):
+        return
+
+    image_att = next(
+        (a for a in ref.attachments if os.path.splitext(a.filename.lower())[1] in _IMAGE_EXTS),
+        None,
+    )
+    if image_att is None:
+        await message.reply("necesito una imagen pa generar el momo")
+        return
+
+    if image_att.size > _MEME_MAX_BYTES:
+        await message.reply("la imagen pesa mucho")
+        return
+
+    try:
+        img_bytes = await image_att.read()
+    except Exception:
+        log.exception("Error descargando imagen para meme")
+        await message.reply("se rompio algo")
+        return
+
+    if not message.guild:
+        await message.reply("no me salio nada, intenta de nuevo")
+        return
+
+    model = await build_markov_model(message.guild.id)
+    if not model or model.is_empty:
+        await message.reply("no me salio nada, intenta de nuevo")
+        return
+
+    text = await asyncio.to_thread(_try_short_sentence, model)
+    if not text:
+        await message.reply("no me salio nada, intenta de nuevo")
+        return
+
+    try:
+        meme_bytes = await asyncio.to_thread(render_meme, img_bytes, text)
+    except Exception:
+        log.exception("Error generando meme con Pillow")
+        await message.reply("se rompio algo")
+        return
+
+    await message.reply(file=discord.File(io.BytesIO(meme_bytes), filename="meme.png"))
+
+
 # --- EVENTOS PRINCIPALES ---
 async def get_latest_video(youtube_channel_id: str) -> dict | None:
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={youtube_channel_id}"
@@ -434,6 +496,10 @@ async def on_command_error(ctx: commands.Context, error: Exception):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
+        return
+
+    if (message.content or "").strip().lower() == "artemis generar":
+        await handle_meme_command(message)
         return
 
     # 1. Procesar comandos básicos (!ping, !chat)
