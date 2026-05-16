@@ -570,7 +570,7 @@ async def generate_groq_meme_caption(
 
     try:
         caption_response = await _groq_client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
