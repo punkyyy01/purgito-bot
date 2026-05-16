@@ -549,7 +549,7 @@ async def generate_groq_meme_caption(
                                 "url": f"data:image/jpeg;base64,{image_b64}"
                             },
                         },
-                        {"type": "text", "content": user_prompt},
+                        {"type": "text", "text": user_prompt},
                     ],
                 },
             ],
