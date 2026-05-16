@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
@@ -29,6 +30,10 @@ def render_meme(image_bytes: bytes, caption: str) -> bytes:
     img_w, img_h = base.size
 
     text_upper = caption.upper()
+    import unicodedata
+    text_upper = unicodedata.normalize('NFKD', text_upper)
+    text_upper = ''.join(c for c in text_upper if not unicodedata.combining(c))
+    text_upper = re.sub(r'\s+', ' ', text_upper).strip()
     padding_h = int(img_w * 0.05)
     usable_w = img_w - 2 * padding_h
 
