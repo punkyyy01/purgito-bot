@@ -528,9 +528,10 @@ async def generate_groq_meme_caption(
                         {
                             "type": "text",
                             "text": (
-                                "Describe this image briefly in 1-2 sentences. "
-                                "Focus on what's happening, the mood, and any "
-                                "notable elements. Be direct, no preamble."
+                                "Describe this image in detail in SPANISH. Include: "
+                                "what you see, any visible text, the mood, what's absurd "
+                                "or funny about it, and any cultural context you recognize. "
+                                "2-3 sentences max. Be direct, no preamble."
                             ),
                         },
                     ],
@@ -546,25 +547,23 @@ async def generate_groq_meme_caption(
     # Paso 2: generar caption con contexto del server
     corpus_text = "\n".join(f"- {msg}" for msg in corpus_sample[:100])
     system_prompt = (
-        "You are a meme caption generator for a Discord server. "
-        "Write a short caption that COMBINES two things: "
-        "1) what is happening in the image "
-        "2) the vocabulary, humor and expressions of the server members. "
-        "The caption must reference something visible in the image "
-        "BUT sound like it was written by the server members. "
-        "Do NOT just describe the image. Do NOT ignore the image completely. "
-        "Find the funny connection between what you see and how these people talk. "
-        "Be unfiltered, irreverent, chaotic. "
-        "Maximum 80 characters. Respond with ONLY the caption. "
-        "No quotes, no explanation, nothing else."
+        "Eres un generador de captions para memes de un servidor de Discord "
+        "donde todos hablan español. "
+        "Tu trabajo es escribir un caption corto que combine: "
+        "1) algo gracioso, absurdo o específico de la imagen "
+        "2) el vocabulario y humor exacto de los miembros del servidor. "
+        "El caption tiene que sonar como si uno de ellos lo hubiera escrito, "
+        "no como un chiste genérico de Facebook. "
+        "Sé irreverente, caótico, sin filtro. "
+        "Máximo 80 caracteres. Responde SOLO con el caption, nada más."
     )
     user_prompt = (
-        f"The image shows: {image_description}\n\n"
-        f"These are REAL messages from the server members — "
-        f"steal their style, words and humor:\n"
+        f"La imagen muestra: {image_description}\n\n"
+        f"Estos son mensajes REALES de los miembros del servidor "
+        f"(usa su vocabulario y humor):\n"
         f"{corpus_text}\n\n"
-        f"Write ONE caption (max 80 chars) that sounds like THESE PEOPLE wrote it. "
-        f"Not a description of the image. Something they would actually say."
+        f"Escribe UN caption (máx 80 caracteres) que conecte algo de la imagen "
+        f"con cómo habla esta gente. Que dé risa. Solo el caption."
     )
 
     try:
