@@ -119,7 +119,7 @@ _message_counter: _LRUDict = _LRUDict(256)
 _corpus_insert_counter: _LRUDict = _LRUDict(256)
 _user_markov_cache: _LRUDict = _LRUDict(64)
 _user_corpus_insert_counter: _LRUDict = _LRUDict(256)
-_momo_cooldowns: dict[int, float] = {}
+_momo_cooldowns: dict[tuple[int, int], float] = {}
 _last_meme_image: dict[int, str] = {}
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
@@ -137,14 +137,10 @@ _r2_client = boto3.client(
 from groq import AsyncGroq
 _groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-ALLOWED_ROLE_IDS = {1434103563746803801, 1434103563700666401}
-
-
-def has_allowed_role(interaction: discord.Interaction) -> bool:
-    member = interaction.user
-    if not isinstance(member, discord.Member):
+def has_admin_permission(interaction: discord.Interaction) -> bool:
+    if not isinstance(interaction.user, discord.Member):
         return False
-    return any(role.id in ALLOWED_ROLE_IDS for role in member.roles)
+    return interaction.user.guild_permissions.manage_guild
 
 
 def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
@@ -573,9 +569,9 @@ async def generate_groq_meme_caption(
     user_prompt = (
         f"Vocabulario y registro de este server:\n"
         f"{corpus_text}\n\n"
-        f"Mirá la imagen. Escribí un caption que cree contraste con lo que muestra: "
+        f"Mira la imagen. Escribe un caption que cree contraste con lo que muestra: "
         f"introducí un sujeto, expectativa o contexto que no encaje. "
-        f"Usá las palabras y el registro de arriba. "
+        f"Usa las palabras y el registro de arriba. "
         f"Máximo 80 caracteres."
     )
 
@@ -735,12 +731,23 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     log.error("Error en comando %s", getattr(ctx, "command", None), exc_info=error)
 
 
+def _is_meme_trigger(message: discord.Message) -> bool:
+    parts = (message.content or "").strip().lower().split()
+    if parts == ["artemis", "generar"]:
+        return True
+    if bot.user:
+        for mention in (f"<@{bot.user.id}>", f"<@!{bot.user.id}>"):
+            if parts == [mention, "generar"]:
+                return True
+    return False
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if (message.content or "").strip().lower() == "artemis generar":
+    if _is_meme_trigger(message):
         await handle_meme_command(message)
         return
 
@@ -910,7 +917,7 @@ async def refeed_slash(interaction: discord.Interaction):
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
 
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -922,7 +929,7 @@ async def refeed_slash(interaction: discord.Interaction):
         return
 
     if await is_channel_ignored(interaction.guild.id, channel.id):
-        await interaction.followup.send("⚠️ Este canal está en la lista de ignorados. Usa `/corpus_ignorar quitar` primero si querés incluirlo.")
+        await interaction.followup.send("⚠️ Este canal está en la lista de ignorados. Usa `/corpus_ignorar quitar` primero si quieres incluirlo.")
         return
 
     saved = 0
@@ -999,7 +1006,7 @@ async def refeed_all_slash(interaction: discord.Interaction):
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
 
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1149,7 +1156,7 @@ async def corpus_wipe_slash(interaction: discord.Interaction):
         await interaction.followup.send("Solo en servidores.", ephemeral=True)
         return
 
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.followup.send("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1191,7 +1198,7 @@ async def gif_add_slash(interaction: discord.Interaction, url: str):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1232,7 +1239,7 @@ async def youtube_add_slash(
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1271,7 +1278,7 @@ async def youtube_remove_slash(interaction: discord.Interaction, youtube_channel
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1287,7 +1294,7 @@ async def youtube_list_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1321,7 +1328,7 @@ async def youtube_set_mention_slash(
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
 
@@ -1379,7 +1386,7 @@ async def corpus_ignorar_add(interaction: discord.Interaction, canal: discord.Te
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     added = await add_ignored_channel(interaction.guild.id, canal.id)
@@ -1395,7 +1402,7 @@ async def corpus_ignorar_quitar(interaction: discord.Interaction, canal: discord
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     removed = await remove_ignored_channel(interaction.guild.id, canal.id)
@@ -1410,7 +1417,7 @@ async def corpus_ignorar_lista(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     channel_ids = await list_ignored_channels(interaction.guild.id)
@@ -1442,7 +1449,7 @@ async def meme_auto_activar(interaction: discord.Interaction, canal: discord.Tex
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     if intervalo < 2:
@@ -1464,7 +1471,7 @@ async def meme_auto_desactivar(interaction: discord.Interaction, canal: discord.
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     removed = await remove_meme_schedule(interaction.guild.id, canal.id)
@@ -1485,7 +1492,7 @@ async def meme_auto_lista(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not has_allowed_role(interaction):
+    if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
     schedules = await list_meme_schedules(interaction.guild.id)
@@ -1519,7 +1526,8 @@ bot.tree.add_command(_meme_auto)
 async def momo_slash(interaction: discord.Interaction):
     import time
     now = time.time()
-    last = _momo_cooldowns.get(interaction.user.id, 0)
+    cooldown_key = (interaction.guild_id or 0, interaction.user.id)
+    last = _momo_cooldowns.get(cooldown_key, 0)
     if now - last < 45:
         remaining = int(45 - (now - last))
         await interaction.response.send_message(
@@ -1527,7 +1535,7 @@ async def momo_slash(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-    _momo_cooldowns[interaction.user.id] = now
+    _momo_cooldowns[cooldown_key] = now
 
     await interaction.response.defer()
 
@@ -1560,7 +1568,7 @@ async def momo_slash(interaction: discord.Interaction):
 
         if not image_url:
             await interaction.followup.send(
-                "Sin imágenes válidas en el pool. Añadí fotos con 🎯.",
+                "Sin imágenes válidas en el pool. Añade fotos con 🎯.",
                 ephemeral=True,
             )
             return
@@ -1590,6 +1598,11 @@ async def momo_slash(interaction: discord.Interaction):
     except Exception:
         log.exception("momo: error inesperado")
         await interaction.followup.send("se rompió algo, revisa los logs.", ephemeral=True)
+
+
+@bot.tree.command(name="meme", description="Genera un meme del server.")
+async def meme_slash(interaction: discord.Interaction):
+    await momo_slash.callback(interaction)
 
 
 if __name__ == "__main__":
