@@ -15,7 +15,7 @@ from collections import OrderedDict
 from logging.handlers import RotatingFileHandler
 from botocore.config import Config
 from markov_engine import SimpleMarkov
-from meme_generator import render_meme, _try_short_sentence
+from meme_generator import render_meme, render_caption, _try_short_sentence
 
 import discord
 from discord import app_commands
@@ -470,7 +470,7 @@ async def handle_meme_command(message: discord.Message) -> None:
         return
 
     try:
-        meme_bytes = await asyncio.to_thread(render_meme, img_bytes, text)
+        meme_bytes = await asyncio.to_thread(render_caption, img_bytes, text)
     except Exception:
         log.exception("Error generando meme con Pillow")
         await message.reply("se rompio algo")
@@ -660,7 +660,7 @@ async def auto_meme_task():
                 continue
 
             # Renderizar y postear
-            meme_bytes = await asyncio.to_thread(render_meme, img_bytes, caption)
+            meme_bytes = await asyncio.to_thread(render_caption, img_bytes, caption)
             await channel.send(
                 file=discord.File(io.BytesIO(meme_bytes), filename="meme.png")
             )
@@ -1567,7 +1567,7 @@ async def momo_slash(interaction: discord.Interaction):
             await interaction.followup.send("No se pudo generar el caption.", ephemeral=True)
             return
 
-        meme_bytes = await asyncio.to_thread(render_meme, img_bytes, caption)
+        meme_bytes = await asyncio.to_thread(render_caption, img_bytes, caption)
         await interaction.followup.send(
             file=discord.File(io.BytesIO(meme_bytes), filename="meme.png")
         )
