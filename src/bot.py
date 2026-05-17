@@ -422,15 +422,17 @@ async def handle_meme_command(message: discord.Message) -> None:
         await message.reply("no me salio nada, intenta de nuevo")
         return
 
-    model = await build_markov_model(message.guild.id)
-    if not model or model.is_empty:
-        log.info("handle_meme_command: modelo Markov no disponible (model=%s is_empty=%s)", model, model.is_empty if model else "N/A")
-        await message.reply("no me salio nada, intenta de nuevo")
-        return
+    log.info("handle_meme_command: generando caption")
 
-    log.info("handle_meme_command: modelo Markov OK, generando texto")
-
-    text = await asyncio.to_thread(_try_short_sentence, model)
+    text = None
+    if _groq_client:
+        corpus_sample = await get_corpus_messages_filtered(message.guild.id, min_words=1, limit=400)
+        if corpus_sample:
+            text = await generate_groq_meme_caption(img_bytes, corpus_sample)
+    if not text:
+        model = await build_markov_model(message.guild.id)
+        if model and not model.is_empty:
+            text = await asyncio.to_thread(_try_short_sentence, model)
     log.info("handle_meme_command: texto generado=%r", text)
     if not text:
         await message.reply("no me salio nada, intenta de nuevo")
@@ -504,35 +506,25 @@ async def generate_groq_meme_caption(
 
     import base64
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-    corpus_text = "\n".join(f"- {msg}" for msg in corpus_sample[:400])
 
-    few_shot = (
-        "EJEMPLOS de captions correctos:\n"
-        "Imagen: foto de alguien durmiendo\n"
-        "Caption: YO A LAS 3AM DESPUES DE PROMETER QUE ME DUERMO TEMPRANO\n\n"
-        "Imagen: gato mirando fijo a la cámara\n"
-        "Caption: CUANDO TE DICEN QUE EL DRAMA ES TUYO\n\n"
-        "Imagen: dos personas discutiendo\n"
-        "Caption: EL CHAT A LAS 2AM SIN RAZON\n\n"
-        "IMPORTANTE: el caption NO describe la imagen literalmente. "
-        "Conecta lo que se ve con algo gracioso, absurdo o del server. "
-        "Máximo 80 caracteres. Solo el caption, nada más.\n\n"
-    )
+    short_msgs = [m for m in corpus_sample if len(m.split()) <= 5]
+    long_msgs = [m for m in corpus_sample if len(m.split()) > 5]
+    voice_sample = short_msgs[:25] + long_msgs[:15]
+    corpus_text = "\n".join(voice_sample)
 
     system_prompt = (
-        "Eres un generador de memes para un servidor de Discord en español. "
-        "Tu trabajo es escribir UN caption corto (máx 80 caracteres) "
-        "que suene exactamente como la gente de este servidor. "
-        "Usa su vocabulario, sus expresiones, su humor. "
-        "Máximo 80 caracteres. Solo el caption, nada más."
+        "Sos un miembro de este servidor de Discord. "
+        "Cuando ves una imagen en el chat escribís algo corto, directo, "
+        "que suena a vos y a tu gente — no a un generador de memes. "
+        "Nada de templates tipo 'YO A LAS X' o 'CUANDO TE DICEN'. "
+        "Máximo 80 caracteres. Solo el texto, nada más."
     )
 
     user_prompt = (
-        f"{few_shot}"
-        f"Mensajes reales del servidor (imita este estilo):\n"
+        f"Así habla la gente en este server:\n"
         f"{corpus_text}\n\n"
-        f"Ahora genera UN caption para la imagen adjunta. "
-        f"Que suene a esta gente. Máximo 80 caracteres."
+        f"Mirá la imagen y escribí lo que pondrías en el chat si la vieras. "
+        f"Máximo 80 caracteres."
     )
 
     try:
@@ -611,7 +603,7 @@ async def auto_meme_task():
 
             # Obtener muestra del corpus
             corpus_sample = await get_corpus_messages_filtered(
-                guild_id, min_words=5, limit=400
+                guild_id, min_words=1, limit=400
             )
             if not corpus_sample:
                 log.info(
@@ -620,11 +612,11 @@ async def auto_meme_task():
                 )
                 continue
 
-            # Generar caption con Groq
+            # Generar caption con Groq, con fallback a Markov si falla
+            caption = None
             if _groq_client:
                 caption = await generate_groq_meme_caption(img_bytes, corpus_sample)
-            else:
-                # Fallback a Markov si no hay Groq configurado
+            if not caption:
                 model = await build_markov_model(guild_id)
                 caption = await asyncio.to_thread(
                     _try_short_sentence, model
@@ -1517,7 +1509,7 @@ async def momo_slash(interaction: discord.Interaction):
             await interaction.followup.send("La imagen pesa mucho.", ephemeral=True)
             return
 
-        corpus_sample = await get_corpus_messages_filtered(guild_id, min_words=5, limit=400)
+        corpus_sample = await get_corpus_messages_filtered(guild_id, min_words=1, limit=400)
         if not corpus_sample:
             await interaction.followup.send("El corpus está vacío.", ephemeral=True)
             return
