@@ -580,6 +580,16 @@ async def count_image_urls(guild_id: int) -> int:
     return int(row[0] if row else 0)
 
 
+async def delete_image_url(guild_id: int, url: str) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "DELETE FROM corpus_images WHERE guild_id=? AND url=?",
+            (guild_id, url),
+        )
+        await db.commit()
+
+
 async def get_random_image_url_excluding(
     guild_id: int,
     exclude_url: str | None = None,

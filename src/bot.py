@@ -55,6 +55,7 @@ from db import (
     get_random_image_url,
     count_image_urls,
     get_random_image_url_excluding,
+    delete_image_url,
 )
 
 # Cargar variables de entorno
@@ -364,6 +365,36 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         return None
 
 
+_IMAGE_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def upload_image_to_r2_sync(url: str, guild_id: int, ext: str) -> str | None:
+    content_type = _IMAGE_CONTENT_TYPES.get(ext.lower(), "image/png")
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            log.error("HTTP %s al descargar imagen para R2: %s", resp.status_code, url)
+            return None
+        data = resp.content
+        key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}{ext}"
+        _r2_client.put_object(
+            Bucket=os.getenv("R2_BUCKET_NAME", ""),
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+        )
+        return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
+    except Exception:
+        log.exception("Error subiendo imagen a R2: %s", url)
+        return None
+
+
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MEME_MAX_BYTES = 10 * 1024 * 1024
 
@@ -570,36 +601,32 @@ async def auto_meme_task():
             if not channel or not isinstance(channel, discord.TextChannel):
                 continue
 
-            # Obtener imagen random del pool del server (sin repetir la anterior)
+            # Obtener imagen válida del pool (con eviction lazy de URLs expiradas)
             guild_id = schedule["guild_id"]
+            img_bytes = None
+            image_url = None
             last = _last_meme_image.get(guild_id)
-            image_url = await get_random_image_url_excluding(guild_id, exclude_url=last)
-            if image_url:
-                _last_meme_image[guild_id] = image_url
+            for _ in range(10):
+                url_candidate = await get_random_image_url_excluding(guild_id, exclude_url=last)
+                if not url_candidate:
+                    break
+                try:
+                    img_resp = await asyncio.to_thread(requests.get, url_candidate, timeout=15)
+                    if img_resp.status_code == 200 and len(img_resp.content) <= _MEME_MAX_BYTES:
+                        img_bytes = img_resp.content
+                        image_url = url_candidate
+                        break
+                    else:
+                        log.warning("auto_meme: URL inválida (HTTP %s), eliminando: %s", img_resp.status_code, url_candidate)
+                        await delete_image_url(guild_id, url_candidate)
+                except Exception:
+                    log.warning("auto_meme: error descargando, eliminando del pool: %s", url_candidate)
+                    await delete_image_url(guild_id, url_candidate)
+
             if not image_url:
-                log.info(
-                    "auto_meme: sin imágenes en pool para guild %s",
-                    guild_id
-                )
+                log.info("auto_meme: sin imágenes válidas en pool para guild %s", guild_id)
                 continue
-
-            # Descargar imagen
-            try:
-                img_resp = await asyncio.to_thread(
-                    __import__("requests").get,
-                    image_url,
-                    timeout=15,
-                )
-                if img_resp.status_code != 200:
-                    log.warning("auto_meme: no se pudo descargar imagen %s", image_url)
-                    continue
-                img_bytes = img_resp.content
-            except Exception:
-                log.exception("auto_meme: error descargando imagen %s", image_url)
-                continue
-
-            if len(img_bytes) > _MEME_MAX_BYTES:
-                continue
+            _last_meme_image[guild_id] = image_url
 
             # Obtener muestra del corpus
             corpus_sample = await get_corpus_messages_filtered(
@@ -830,10 +857,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if ext in {".png", ".jpg", ".jpeg", ".webp"} \
                 and attachment.size <= _MEME_MAX_BYTES:
             try:
-                inserted = await save_image_url(payload.guild_id, attachment.url)
+                r2_url = await asyncio.to_thread(
+                    upload_image_to_r2_sync, attachment.url, payload.guild_id, ext
+                )
+                if not r2_url:
+                    log.warning("No se pudo subir imagen a R2: %s", attachment.url)
+                    continue
+                inserted = await save_image_url(payload.guild_id, r2_url)
                 if inserted:
                     added = True
-                    log.info("Imagen agregada al pool 🎯: %s", attachment.url)
+                    log.info("Imagen agregada al pool 🎯 (R2): %s", r2_url)
             except Exception:
                 log.exception("Error guardando imagen por reaccion")
     if added:
@@ -1483,31 +1516,34 @@ async def momo_slash(interaction: discord.Interaction):
 
     try:
         guild_id = interaction.guild.id
+
+        img_bytes = None
+        image_url = None
         last_img = _last_meme_image.get(guild_id)
-        image_url = await get_random_image_url_excluding(guild_id, exclude_url=last_img)
-        if image_url:
-            _last_meme_image[guild_id] = image_url
+        for _ in range(10):
+            url_candidate = await get_random_image_url_excluding(guild_id, exclude_url=last_img)
+            if not url_candidate:
+                break
+            try:
+                img_resp = await asyncio.to_thread(requests.get, url_candidate, timeout=15)
+                if img_resp.status_code == 200 and len(img_resp.content) <= _MEME_MAX_BYTES:
+                    img_bytes = img_resp.content
+                    image_url = url_candidate
+                    break
+                else:
+                    log.warning("momo: URL inválida (HTTP %s), eliminando del pool: %s", img_resp.status_code, url_candidate)
+                    await delete_image_url(guild_id, url_candidate)
+            except Exception:
+                log.warning("momo: error descargando, eliminando del pool: %s", url_candidate)
+                await delete_image_url(guild_id, url_candidate)
+
         if not image_url:
             await interaction.followup.send(
-                "Sin imágenes en el pool todavía. Sube algunas fotos al server primero.",
+                "Sin imágenes válidas en el pool. Añadí fotos con 🎯.",
                 ephemeral=True,
             )
             return
-
-        try:
-            img_resp = await asyncio.to_thread(requests.get, image_url, timeout=15)
-            if img_resp.status_code != 200:
-                await interaction.followup.send("No se pudo descargar la imagen.", ephemeral=True)
-                return
-            img_bytes = img_resp.content
-        except Exception:
-            log.exception("momo: error descargando imagen %s", image_url)
-            await interaction.followup.send("No se pudo descargar la imagen.", ephemeral=True)
-            return
-
-        if len(img_bytes) > _MEME_MAX_BYTES:
-            await interaction.followup.send("La imagen pesa mucho.", ephemeral=True)
-            return
+        _last_meme_image[guild_id] = image_url
 
         corpus_sample = await get_corpus_messages_filtered(guild_id, min_words=1, limit=400)
         if not corpus_sample:
