@@ -527,6 +527,18 @@ async def check_youtube():
     await asyncio.gather(*(_check_one(sub) for sub in subs))
 
 
+def _detect_image_mime(image_bytes: bytes) -> str:
+    if image_bytes[:4] == b'\x89PNG':
+        return "image/png"
+    if image_bytes[:2] == b'\xff\xd8':
+        return "image/jpeg"
+    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return "image/webp"
+    if image_bytes[:3] == b'GIF':
+        return "image/gif"
+    return "image/jpeg"
+
+
 async def generate_groq_meme_caption(
     image_bytes: bytes,
     corpus_sample: list[str],
@@ -536,6 +548,7 @@ async def generate_groq_meme_caption(
         return None
 
     import base64
+    mime_type = _detect_image_mime(image_bytes)
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     short_msgs = [m for m in corpus_sample if len(m.split()) <= 5]
@@ -544,19 +557,17 @@ async def generate_groq_meme_caption(
     corpus_text = "\n".join(voice_sample)
 
     system_prompt = (
-        "Generás captions de memes irónicos para un servidor de Discord hispanohablante. "
-        "La gracia viene de la disonancia entre el texto y la imagen: "
-        "el texto introduce un sujeto, expectativa o contexto que no encaja con lo que muestra "
-        "la imagen, y ese choque es la ironía. "
-        "No narrás la imagen ni la describís con un setup adelante. "
-        "Técnicas: atribuir la imagen a alguien que no encaja ('los padres que pagaron la carrera', "
-        "'el cliente que confió', 'mi jefe'); crear expectativa alta que la imagen rompe; "
-        "presentar la imagen como evidencia de algo opuesto a lo que muestra; "
-        "comparar la imagen con un concepto grandioso o grave que choca con ella "
-        "('el futuro de la IA', 'la nueva generación', 'el avance de la humanidad'). "
-        "POV y CUANDO funcionan solo si lo que sigue contrasta con la imagen, no si la resume. "
-        "El vocabulario y el tono los sacás del corpus del server. "
-        "Máximo 80 caracteres. Solo el texto, nada más."
+        "You write ironic meme captions for a Spanish-speaking Discord server. "
+        "The humor comes from dissonance: the caption introduces a subject, expectation, or context "
+        "that clashes with what the image actually shows — that clash is the joke. "
+        "Never describe or narrate the image. "
+        "Techniques: attribute the image to a subject that clearly doesn't fit it; "
+        "set up a high expectation that the image deflates; "
+        "present the image as evidence of the opposite of what it shows; "
+        "compare the image to a grand or grave concept it contradicts. "
+        "POV and CUANDO only work when what follows contrasts with the image, not when it summarizes it. "
+        "Use the vocabulary and tone from the server corpus. "
+        "Max 80 characters. Return only the caption text, nothing else."
     )
 
     user_prompt = (
@@ -579,14 +590,14 @@ async def generate_groq_meme_caption(
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
+                                "url": f"data:{mime_type};base64,{image_b64}"
                             },
                         },
                         {"type": "text", "text": user_prompt},
                     ],
                 },
             ],
-            max_tokens=60,
+            max_tokens=120,
             temperature=0.9,
         )
         caption = response.choices[0].message.content.strip()
