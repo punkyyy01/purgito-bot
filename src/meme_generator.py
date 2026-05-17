@@ -89,7 +89,21 @@ def render_caption(image_bytes: bytes, caption: str) -> bytes:
 
 
 import random as _random
-_LAYOUTS = ["top", "bottom", "top_bottom"]
+
+_SPLIT_CONNECTORS = [
+    "HASTA QUE", "Y ENTONCES",
+    "PERO", "CUANDO", "VS", "MIENTRAS", "ENTONCES", "PORQUE", "O",
+]
+
+
+def _find_connector_split(words: list[str]) -> tuple[str, str] | None:
+    for connector in _SPLIT_CONNECTORS:
+        conn_words = connector.split()
+        n = len(conn_words)
+        for i in range(1, len(words) - n):
+            if words[i:i + n] == conn_words:
+                return " ".join(words[:i]), " ".join(words[i:])
+    return None
 
 
 def render_meme(image_bytes: bytes, caption: str) -> bytes:
@@ -107,18 +121,16 @@ def render_meme(image_bytes: bytes, caption: str) -> bytes:
     if not text:
         return image_bytes
 
-    layout = _random.choice(_LAYOUTS)
     words = text.split()
-    if layout == "top_bottom" and len(words) >= 4:
-        mid = len(words) // 2
-        top_text = " ".join(words[:mid])
-        bottom_text = " ".join(words[mid:])
-    elif layout == "top":
-        top_text = text
-        bottom_text = None
+    split = _find_connector_split(words) if len(words) >= 4 else None
+
+    if split:
+        top_text, bottom_text = split
     else:
-        top_text = None
-        bottom_text = text
+        if _random.choice([True, False]):
+            top_text, bottom_text = text, None
+        else:
+            top_text, bottom_text = None, text
 
     draw = ImageDraw.Draw(base)
 
