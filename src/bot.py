@@ -65,6 +65,17 @@ ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().low
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return default
+    return value if value > 0 else default
+
 # Configurar logging
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOG_PATH = os.path.join(_BASE_DIR, "data", "bot.log")
@@ -123,7 +134,10 @@ _momo_cooldowns: dict[tuple[int, int], float] = {}
 _last_meme_image: dict[int, str] = {}
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
-_REFEED_MAX_MESSAGES = 20_000
+_REFEED_MAX_MESSAGES = _env_int("REFEED_MAX_MESSAGES", 80_000)
+_REFEED_ALL_MAX_MESSAGES = _env_int("REFEED_ALL_MAX_MESSAGES", 20_000)
+_MARKOV_TRAINING_MESSAGES = _env_int("MARKOV_TRAINING_MESSAGES", 5_000)
+_USER_MARKOV_TRAINING_MESSAGES = _env_int("USER_MARKOV_TRAINING_MESSAGES", 2_000)
 
 _r2_client = boto3.client(
     "s3",
@@ -269,7 +283,7 @@ async def build_markov_model(guild_id: int) -> SimpleMarkov | None:
     if cached is not None:
         return cached
 
-    corpus = await get_corpus_messages(guild_id)
+    corpus = await get_corpus_messages(guild_id, limit=_MARKOV_TRAINING_MESSAGES)
     if len(corpus) < 50:
         return None
 
@@ -311,7 +325,7 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
     key = (guild_id, author_id)
     model = _user_markov_cache.get(key)
     if model is None:
-        corpus = await get_user_messages(guild_id, author_id)
+        corpus = await get_user_messages(guild_id, author_id, limit=_USER_MARKOV_TRAINING_MESSAGES)
         if len(corpus) < 30:
             return None
 
@@ -1033,7 +1047,7 @@ async def refeed_all_slash(interaction: discord.Interaction):
         saved = 0
         channel_fetched = 0
         last_msg_id: int | None = None
-        while channel_fetched < _REFEED_MAX_MESSAGES:
+        while channel_fetched < _REFEED_ALL_MAX_MESSAGES:
             before_obj = discord.Object(id=last_msg_id) if last_msg_id else None
             try:
                 batch = [msg async for msg in channel.history(limit=100, before=before_obj, oldest_first=False)]
@@ -1092,13 +1106,13 @@ async def refeed_all_slash(interaction: discord.Interaction):
 
             last_msg_id = batch[-1].id
 
-        if channel_fetched >= _REFEED_MAX_MESSAGES:
+        if channel_fetched >= _REFEED_ALL_MAX_MESSAGES:
             any_channel_hit_limit = True
         total_saved += saved
 
     result = f"✅ Refeed_all completado. Total guardado: {total_saved} mensajes."
     if any_channel_hit_limit:
-        result += f"\n⚠️ Límite de {_REFEED_MAX_MESSAGES:,} mensajes leídos alcanzado; algunos canales pueden estar incompletos."
+        result += f"\n⚠️ Límite de {_REFEED_ALL_MAX_MESSAGES:,} mensajes leídos alcanzado; algunos canales pueden estar incompletos."
     await interaction.followup.send(result)
 
 

@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS corpus_messages (
     UNIQUE(guild_id, message_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_corpus_messages_guild ON corpus_messages(guild_id);
+CREATE INDEX IF NOT EXISTS idx_corpus_messages_guild_channel ON corpus_messages(guild_id, channel_id);
+
 CREATE TABLE IF NOT EXISTS corpus_gifs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
@@ -65,6 +68,8 @@ CREATE TABLE IF NOT EXISTS user_corpus (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(guild_id, message_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_user_corpus_guild_author ON user_corpus(guild_id, author_id);
 
 CREATE TABLE IF NOT EXISTS ignored_channels (
     guild_id INTEGER NOT NULL,

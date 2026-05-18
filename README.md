@@ -65,6 +65,17 @@ GUILD_ID=123456789012345678
 # ── Intents ────────────────────────────────────────────────────────
 ENABLE_MESSAGE_CONTENT=true
 
+# ── Límites de importación de historial (corpus) ───────────────────
+# /refeed: máximo de mensajes a leer del canal actual
+REFEED_MAX_MESSAGES=80000
+# /refeed_all: máximo de mensajes a leer por canal
+REFEED_ALL_MAX_MESSAGES=20000
+
+# ── Markov (muestra de entrenamiento) ──────────────────────────────
+# Evita cargar todo el corpus a RAM. Se entrena con un muestreo aleatorio.
+MARKOV_TRAINING_MESSAGES=5000
+USER_MARKOV_TRAINING_MESSAGES=2000
+
 # ── Cloudflare R2 (para persistir GIFs de Discord CDN) ────────────
 R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 R2_ACCESS_KEY_ID=tu_key
@@ -87,8 +98,8 @@ python src/bot.py
 
 | Comando | Descripción | Permisos |
 |---|---|---|
-| `/refeed` | Importa los últimos mensajes del canal al corpus (máx. 20 000) | Rol autorizado |
-| `/refeed_all` | Importa mensajes de todos los canales del servidor | Rol autorizado |
+| `/refeed` | Importa los últimos mensajes del canal al corpus (máx. 80 000 por defecto) | Rol autorizado |
+| `/refeed_all` | Importa mensajes de todos los canales del servidor (máx. 20 000 por canal por defecto) | Rol autorizado |
 | `/generar` | Genera un mensaje con el modelo Markov del servidor | Todos |
 | `/imitar @usuario` | Genera un mensaje imitando el estilo del usuario (mín. 30 msgs) | Todos |
 | `/corpus_info` | Muestra cuántos mensajes tiene el corpus en el canal actual | Todos |
