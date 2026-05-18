@@ -100,7 +100,7 @@ if not TOKEN:
 intents = discord.Intents.default()
 intents.message_content = ENABLE_MESSAGE_CONTENT
 
-# Define `_CONECTORES_FINALES` at the top of the file to avoid undefined variable errors.
+# Conectores comunes para recortar finales de frases incompletas.
 _CONECTORES_FINALES = [
     " y", " o", " con", " pero", " de", " para", " a", " que", " entonces", " como"
 ]
@@ -212,7 +212,7 @@ def chunk_message(text: str, max_length: int = 1900) -> list[str]:
 _EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', regex.UNICODE)
 
 
-# Frases que delatan a la IA "asistente"
+# Postproceso para recortar muletillas y finales raros.
 def post_process_reply(text: str) -> str:
     if not text:
         return "me quedé en blanco, pregunta de nuevo"

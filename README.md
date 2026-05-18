@@ -26,7 +26,9 @@ Cadenas de Markov · Colección de GIFs · Notificaciones de YouTube
 | 💬 | **Modo chat** | Responde cuando lo mencionas o le haces reply |
 | 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
 | 📺 | **Notificaciones YouTube** | Sondea canales cada 15 min y avisa cuando hay video nuevo |
-| 🗂️ | **Corpus administrable** | Importa historial, consulta estadísticas o limpia el corpus con un comando |
+| 🖼️ | **Memes (manual y automático)** | Genera memes con `/momo` o respondiendo a una imagen con `artemis generar`; opción de captions con Groq |
+| 🎯 | **Pool de imágenes** | Con reacción 🎯 a una imagen, se guarda en un pool para memes |
+| 🗂️ | **Corpus administrable** | Importa historial, consulta estadísticas, ignora canales o limpia el corpus |
 
 ---
 
@@ -105,6 +107,14 @@ python src/bot.py
 | `/corpus_info` | Muestra cuántos mensajes tiene el corpus en el canal actual | Todos |
 | `/corpus_wipe` | Borra todo el corpus y reinicia la caché Markov | Rol autorizado |
 
+### 🚫 Canales ignorados (corpus)
+
+| Comando | Descripción | Permisos |
+|---|---|---|
+| `/corpus_ignorar add #canal` | Añade un canal a la lista de ignorados | Rol autorizado |
+| `/corpus_ignorar quitar #canal` | Quita un canal de la lista de ignorados | Rol autorizado |
+| `/corpus_ignorar lista` | Lista canales ignorados | Rol autorizado |
+
 ### 💬 Chat automático
 
 | Comando | Descripción | Permisos |
@@ -117,6 +127,23 @@ python src/bot.py
 | Comando | Descripción | Permisos |
 |---|---|---|
 | `/gif_add <url>` | Añade un GIF manualmente (Tenor, Giphy o Discord CDN) | Rol autorizado |
+
+### 🖼️ Memes
+
+| Comando | Descripción | Permisos |
+|---|---|---|
+| `/momo` | Genera un meme usando una imagen del pool (cooldown ~45s por usuario) | Todos |
+| `/meme` | Alias de `/momo` | Todos |
+
+**Trigger rápido (sin slash):** responde (reply) a un mensaje con imagen y escribe `artemis generar` o `@bot generar`.
+
+### ⏱️ Memes automáticos
+
+| Comando | Descripción | Permisos |
+|---|---|---|
+| `/meme_auto activar #canal <horas>` | Activa memes automáticos cada 2–24h | Rol autorizado |
+| `/meme_auto desactivar #canal` | Desactiva memes automáticos | Rol autorizado |
+| `/meme_auto lista` | Lista configuración actual | Rol autorizado |
 
 ### 📺 YouTube
 
@@ -140,7 +167,7 @@ python src/bot.py
 <details>
 <summary><b>🧠 Construcción del corpus</b></summary>
 
-Cada mensaje de usuario pasa por un filtro antes de guardarse: se eliminan URLs, menciones de Discord y líneas sin letras. Los mensajes de menos de 4 palabras se descartan. El corpus tiene deduplicación por `(servidor, canal, contenido)`.
+Cada mensaje de usuario pasa por un filtro antes de guardarse: se eliminan URLs, menciones de Discord, secuencias ANSI típicas de logs y líneas sin letras. Se colapsan espacios y se descartan mensajes que queden vacíos. El corpus deduplica por `(servidor, message_id)`.
 
 El bot mantiene **dos corpus independientes**:
 - **Servidor** — para respuestas generales (`/generar`, auto-reply)
@@ -172,6 +199,13 @@ Se puede restringir a un canal específico con `/chatmode on #canal`. Requiere e
 <summary><b>🎞️ Colección de GIFs</b></summary>
 
 Los GIFs detectados en mensajes (Tenor, Giphy, adjuntos `.gif`) se guardan automáticamente. Los de `cdn.discordapp.com` se suben a **Cloudflare R2** para que no caduquen cuando Discord elimine el adjunto original.
+
+</details>
+
+<details>
+<summary><b>🎯 Pool de imágenes</b></summary>
+
+Al reaccionar con **🎯** a un mensaje con imagen (`.png`, `.jpg`, `.jpeg`, `.webp`), el bot sube la imagen a **R2** (si está configurado) y guarda su URL en la base de datos para usarla luego en `/momo` y en los memes automáticos.
 
 </details>
 
