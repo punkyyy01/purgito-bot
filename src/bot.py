@@ -56,6 +56,11 @@ from db import (
     count_image_urls,
     get_random_image_url_excluding,
     delete_image_url,
+    add_frase_especial,
+    get_random_frase_especial,
+    list_frases_especiales,
+    get_frase_especial,
+    delete_frase_especial,
 )
 
 # Cargar variables de entorno
@@ -138,6 +143,7 @@ _REFEED_MAX_MESSAGES = _env_int("REFEED_MAX_MESSAGES", 80_000)
 _REFEED_ALL_MAX_MESSAGES = _env_int("REFEED_ALL_MAX_MESSAGES", 20_000)
 _MARKOV_TRAINING_MESSAGES = _env_int("MARKOV_TRAINING_MESSAGES", 5_000)
 _USER_MARKOV_TRAINING_MESSAGES = _env_int("USER_MARKOV_TRAINING_MESSAGES", 2_000)
+SPECIAL_PHRASE_PROBABILITY = 0.20
 
 _r2_client = boto3.client(
     "s3",
@@ -352,6 +358,16 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
         log.exception("Error generando frase Markov para usuario %s", author_id)
         sentence = None
     return sentence
+
+
+async def generate_response(guild_id: int) -> tuple[str | None, bool]:
+    """Decide entre frase especial o Markov. Retorna (texto, es_especial).
+    es_especial=True indica que el texto no debe pasar por post_process_reply."""
+    if random.random() < SPECIAL_PHRASE_PROBABILITY:
+        phrase = await get_random_frase_especial(guild_id)
+        if phrase:
+            return phrase, True
+    return await generate_markov_reply(guild_id), False
 
 
 def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
@@ -847,10 +863,10 @@ async def on_message(message: discord.Message):
                     if gif_url:
                         await message.channel.send(gif_url)
                         return
-                reply = await generate_markov_reply(message.guild.id)
-                if reply is not None:
-                    reply = post_process_reply(reply)
-                    for chunk in chunk_message(reply):
+                text, is_special = await generate_response(message.guild.id)
+                if text is not None:
+                    final = text if is_special else post_process_reply(text)
+                    for chunk in chunk_message(final):
                         await message.channel.send(chunk)
             except Exception:
                 log.exception("Error en generación automática de respuesta")
@@ -872,8 +888,13 @@ async def on_message(message: discord.Message):
             await message.reply(gif_url)
             return
 
-    reply = await generate_markov_reply(message.guild.id)
-    reply = post_process_reply(reply) if reply else "..."
+    text, is_special = await generate_response(message.guild.id)
+    if text is None:
+        reply = "..."
+    elif is_special:
+        reply = text
+    else:
+        reply = post_process_reply(text)
     for chunk in chunk_message(reply):
         await message.reply(chunk)
 
@@ -1126,8 +1147,13 @@ async def generar_slash(interaction: discord.Interaction):
     if interaction.channel is None:
         await interaction.followup.send("No puedo determinar el canal.", ephemeral=True)
         return
-    reply = await generate_markov_reply(interaction.guild.id)
-    reply = post_process_reply(reply) if reply else "..."
+    text, is_special = await generate_response(interaction.guild.id)
+    if text is None:
+        reply = "..."
+    elif is_special:
+        reply = text
+    else:
+        reply = post_process_reply(text)
     await interaction.followup.send(reply)
 
 
@@ -1617,6 +1643,61 @@ async def momo_slash(interaction: discord.Interaction):
 @bot.tree.command(name="meme", description="Genera un meme del server.")
 async def meme_slash(interaction: discord.Interaction):
     await momo_slash.callback(interaction)
+
+
+@bot.tree.command(name="añadir_frase", description="Añade una frase especial al pool del servidor.")
+@app_commands.describe(frase="Frase que el bot puede soltar en cualquier momento")
+async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    texto = frase.strip()
+    if not texto:
+        await interaction.response.send_message("❌ La frase no puede estar vacía.", ephemeral=True)
+        return
+    await add_frase_especial(interaction.guild.id, interaction.user.id, interaction.user.display_name, texto)
+    await interaction.response.send_message("✅ Frase guardada.")
+
+
+@bot.tree.command(name="ver_frases", description="Lista todas las frases especiales del servidor.")
+async def ver_frases_slash(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    frases = await list_frases_especiales(interaction.guild.id)
+    if not frases:
+        await interaction.followup.send("ℹ️ No hay frases especiales en este servidor.")
+        return
+    lines = [
+        f"`{f['id']}` — \"{f['frase']}\" — {f['user_name']} ({f['created_at'][:10]})"
+        for f in frases
+    ]
+    body = "**Frases especiales:**\n" + "\n".join(lines)
+    if len(body) > 1900:
+        body = body[:1900] + "\n…(lista truncada)"
+    await interaction.followup.send(body)
+
+
+@bot.tree.command(name="borrar_frase", description="Borra una frase especial por su ID.")
+@app_commands.describe(id="ID de la frase a borrar (visible en /ver_frases)")
+async def borrar_frase_slash(interaction: discord.Interaction, id: int):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    frase = await get_frase_especial(interaction.guild.id, id)
+    if frase is None:
+        await interaction.response.send_message("❌ No existe una frase con ese ID en este servidor.", ephemeral=True)
+        return
+    is_admin = (
+        isinstance(interaction.user, discord.Member)
+        and interaction.user.guild_permissions.administrator
+    )
+    if frase["user_id"] != interaction.user.id and not is_admin:
+        await interaction.response.send_message("❌ Solo puedes borrar tus propias frases.", ephemeral=True)
+        return
+    await delete_frase_especial(interaction.guild.id, id)
+    await interaction.response.send_message("✅ Frase borrada.", ephemeral=True)
 
 
 if __name__ == "__main__":

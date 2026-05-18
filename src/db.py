@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS corpus_images (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(guild_id, url)
 );
+
+CREATE TABLE IF NOT EXISTS frases_especiales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    frase TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_frases_especiales_guild ON frases_especiales(guild_id);
 """
 
 
@@ -616,3 +626,67 @@ async def get_random_image_url_excluding(
         ) as cursor:
             row = await cursor.fetchone()
     return row[0] if row else None
+
+
+async def add_frase_especial(guild_id: int, user_id: int, user_name: str, frase: str) -> bool:
+    text = (frase or "").strip()
+    if not text:
+        return False
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT INTO frases_especiales (guild_id, user_id, user_name, frase) VALUES (?, ?, ?, ?)",
+            (guild_id, user_id, user_name, text),
+        )
+        inserted = _was_inserted(cursor)
+        await db.commit()
+    return inserted
+
+
+async def get_random_frase_especial(guild_id: int) -> str | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT frase FROM frases_especiales WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def list_frases_especiales(guild_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, user_id, user_name, frase, created_at "
+        "FROM frases_especiales WHERE guild_id=? ORDER BY id",
+        (guild_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {"id": r[0], "user_id": r[1], "user_name": r[2], "frase": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+async def get_frase_especial(guild_id: int, frase_id: int) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, user_id, user_name, frase, created_at "
+        "FROM frases_especiales WHERE guild_id=? AND id=?",
+        (guild_id, frase_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "user_id": row[1], "user_name": row[2], "frase": row[3], "created_at": row[4]}
+
+
+async def delete_frase_especial(guild_id: int, frase_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM frases_especiales WHERE guild_id=? AND id=?",
+            (guild_id, frase_id),
+        )
+        deleted = cursor.rowcount > 0
+        await db.commit()
+    return deleted
