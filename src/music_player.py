@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -19,9 +20,38 @@ YTDL_OPTS = {
     'ignoreerrors': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch',
+    'default_search': 'scsearch',
     'source_address': '0.0.0.0',
 }
+
+_YT_RE = re.compile(
+    r'^https?://(?:www\.|m\.|music\.)?(?:youtube\.com/|youtu\.be/)',
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(r'^https?://', re.IGNORECASE)
+
+
+class YouTubeNotAllowed(Exception):
+    pass
+
+
+def _resolve_query(query: str) -> str:
+    """
+    Returns the effective query to pass to yt-dlp:
+    - YouTube URLs  → raises YouTubeNotAllowed
+    - Other URLs    → returned as-is
+    - Plain text    → prefixed with 'scsearch:'
+    """
+    q = query.strip()
+    if _YT_RE.match(q):
+        raise YouTubeNotAllowed(
+            "YouTube no está disponible desde este servidor. "
+            "Usa el nombre de la canción/artista (busca en SoundCloud) "
+            "o una URL directa de SoundCloud."
+        )
+    if _URL_RE.match(q):
+        return q
+    return f'scsearch:{q}'
 
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -73,10 +103,12 @@ def progress_bar(elapsed: int, total: int, width: int = 12) -> str:
 
 async def fetch_song(query: str) -> Optional[SongInfo]:
     """Extract song metadata (no stream URL) for a search query or URL."""
+    effective = _resolve_query(query)  # raises YouTubeNotAllowed if needed
+
     def _extract():
         opts = {**YTDL_OPTS, 'skip_download': True}
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(query, download=False)
+            info = ydl.extract_info(effective, download=False)
             if not info:
                 return None
             if 'entries' in info:
