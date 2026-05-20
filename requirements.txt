@@ -9,3 +9,5 @@ feedparser
 regex
 Pillow
 groq
+yt-dlp
+PyNaCl

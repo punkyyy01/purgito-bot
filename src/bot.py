@@ -1700,6 +1700,9 @@ async def borrar_frase_slash(interaction: discord.Interaction, id: int):
     await interaction.response.send_message("✅ Frase borrada.", ephemeral=True)
 
 
+from music_commands import register_music_commands
+register_music_commands(bot)
+
 if __name__ == "__main__":
     try:
         bot.run(TOKEN)
