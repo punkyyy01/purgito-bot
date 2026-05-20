@@ -50,6 +50,7 @@ def _is_youtube_info(info: dict) -> bool:
 
 def _build_ytdl_opts() -> dict:
     opts = dict(YTDL_OPTS)
+    opts['cookiefile'] = '/opt/bot-discord-purg/cookies.txt'
     cookiefile = os.getenv("YTDL_COOKIES_FILE")
     if cookiefile:
         opts['cookiefile'] = cookiefile
@@ -162,9 +163,9 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
                 return info
         except yt_dlp.utils.DownloadError as e:
             msg = str(e)
-            if "Sign in to confirm you're not a bot" in msg:
+            if "Sign in" in msg or "bot" in msg.lower():
                 raise MediaFetchError(
-                    "YouTube requiere verificacion. Usa SoundCloud o configura cookies para yt-dlp."
+                    "❌ YouTube bloqueó la request. Las cookies pueden haber expirado — contacta al admin del bot."
                 ) from e
             if "soundcloud" in msg.lower() and "404" in msg:
                 if _URL_RE.match(effective) and "soundcloud.com/search/sounds" in effective:
