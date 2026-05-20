@@ -16,12 +16,12 @@ log = logging.getLogger(__name__)
 EMBED_COLOR = 0x8B00FF
 
 YTDL_OPTS = {
-    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+    'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'quiet': True,
-    'no_warnings': True,
+    'no_warnings': False,
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
 }
