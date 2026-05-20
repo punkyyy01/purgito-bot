@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -33,6 +34,29 @@ _URL_RE = re.compile(r'^https?://', re.IGNORECASE)
 
 class YouTubeNotAllowed(Exception):
     pass
+
+
+class MediaFetchError(Exception):
+    def __init__(self, user_message: str):
+        super().__init__(user_message)
+        self.user_message = user_message
+
+
+def _is_youtube_info(info: dict) -> bool:
+    extractor = (info.get('extractor_key') or info.get('extractor') or '').lower()
+    return 'youtube' in extractor
+
+
+def _build_ytdl_opts() -> dict:
+    opts = dict(YTDL_OPTS)
+    cookiefile = os.getenv("YTDL_COOKIES_FILE")
+    if cookiefile:
+        opts['cookiefile'] = cookiefile
+    cookies_from_browser = os.getenv("YTDL_COOKIES_FROM_BROWSER")
+    if cookies_from_browser:
+        parts = cookies_from_browser.split(":", 1)
+        opts['cookiesfrombrowser'] = tuple(parts) if len(parts) > 1 else parts[0]
+    return opts
 
 
 def _resolve_query(query: str) -> str:
@@ -106,25 +130,49 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
     effective = _resolve_query(query)  # raises YouTubeNotAllowed if needed
 
     def _extract():
-        opts = {**YTDL_OPTS, 'skip_download': True}
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(effective, download=False)
-            if not info:
-                return None
-            if 'entries' in info:
-                entries = [e for e in info['entries'] if e]
-                if not entries:
+        opts = {**_build_ytdl_opts(), 'skip_download': True}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(effective, download=False)
+                if not info:
                     return None
-                info = entries[0]
-                if 'title' not in info:
-                    url = info.get('url') or info.get('webpage_url', '')
-                    info = ydl.extract_info(url, download=False) if url else None
-            return info
+                if 'entries' in info:
+                    entries = [e for e in info['entries'] if e]
+                    if not entries:
+                        return None
+                    info = entries[0]
+                    if 'title' not in info:
+                        url = info.get('url') or info.get('webpage_url', '')
+                        info = ydl.extract_info(url, download=False) if url else None
+                return info
+        except yt_dlp.utils.DownloadError as e:
+            msg = str(e)
+            if "Sign in to confirm you're not a bot" in msg:
+                raise MediaFetchError(
+                    "YouTube requiere verificacion. Usa SoundCloud o configura cookies para yt-dlp."
+                ) from e
+            if "soundcloud" in msg.lower() and "404" in msg:
+                raise MediaFetchError(
+                    "SoundCloud respondio 404. La pista puede estar privada o eliminada."
+                ) from e
+            raise MediaFetchError("No se pudo obtener la informacion de esa URL.") from e
+        except yt_dlp.utils.ExtractorError as e:
+            msg = str(e)
+            if "soundcloud" in msg.lower() and "404" in msg:
+                raise MediaFetchError(
+                    "SoundCloud respondio 404. La pista puede estar privada o eliminada."
+                ) from e
+            raise MediaFetchError("No se pudo obtener la informacion de esa URL.") from e
 
     loop = asyncio.get_running_loop()
     info = await loop.run_in_executor(None, _extract)
     if not info:
         return None
+    if _is_youtube_info(info):
+        raise YouTubeNotAllowed(
+            "YouTube no esta disponible desde este servidor. "
+            "Usa SoundCloud o configura cookies para yt-dlp."
+        )
     return SongInfo(
         title=info.get('title', 'Desconocido'),
         webpage_url=info.get('webpage_url') or info.get('url', query),
@@ -137,21 +185,30 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
 async def fetch_stream_url(webpage_url: str) -> Optional[str]:
     """Get a fresh direct audio stream URL just before playing."""
     def _extract():
-        opts = {**YTDL_OPTS, 'skip_download': True}
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(webpage_url, download=False)
-            if not info:
-                return None
-            if 'entries' in info:
-                entries = [e for e in info['entries'] if e]
-                info = entries[0] if entries else None
-            if not info:
-                return None
-            formats = info.get('formats', [])
-            audio_only = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-            if audio_only:
-                return audio_only[-1].get('url')
-            return info.get('url')
+        opts = {**_build_ytdl_opts(), 'skip_download': True}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(webpage_url, download=False)
+                if not info:
+                    return None
+                if 'entries' in info:
+                    entries = [e for e in info['entries'] if e]
+                    info = entries[0] if entries else None
+                if not info:
+                    return None
+                if _is_youtube_info(info):
+                    return None
+                formats = info.get('formats', [])
+                audio_only = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                if audio_only:
+                    return audio_only[-1].get('url')
+                return info.get('url')
+        except yt_dlp.utils.DownloadError as e:
+            log.warning("yt-dlp DownloadError en stream: %s", e)
+            return None
+        except yt_dlp.utils.ExtractorError as e:
+            log.warning("yt-dlp ExtractorError en stream: %s", e)
+            return None
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _extract)

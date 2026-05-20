@@ -6,7 +6,7 @@ from discord.ext import commands
 
 from music_player import (
     EMBED_COLOR, LoopMode, SongInfo, fmt_duration, progress_bar,
-    fetch_song, get_player, remove_player, YouTubeNotAllowed,
+    fetch_song, get_player, remove_player, MediaFetchError, YouTubeNotAllowed,
 )
 
 
@@ -184,6 +184,11 @@ def register_music_commands(bot: commands.Bot) -> None:
         except YouTubeNotAllowed as e:
             await interaction.followup.send(
                 embed=discord.Embed(description=f"❌ {e}", color=EMBED_COLOR)
+            )
+            return
+        except MediaFetchError as e:
+            await interaction.followup.send(
+                embed=discord.Embed(description=f"❌ {e.user_message}", color=EMBED_COLOR)
             )
             return
 
