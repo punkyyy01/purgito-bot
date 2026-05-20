@@ -140,10 +140,22 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
                     entries = [e for e in info['entries'] if e]
                     if not entries:
                         return None
-                    info = entries[0]
-                    if 'title' not in info:
-                        url = info.get('url') or info.get('webpage_url', '')
-                        info = ydl.extract_info(url, download=False) if url else None
+                    info = None
+                    for entry in entries:
+                        url = entry.get('url') or entry.get('webpage_url')
+                        if not url:
+                            continue
+                        try:
+                            candidate = ydl.extract_info(url, download=False)
+                        except yt_dlp.utils.DownloadError:
+                            continue
+                        except yt_dlp.utils.ExtractorError:
+                            continue
+                        if candidate and candidate.get('title'):
+                            info = candidate
+                            break
+                    if not info:
+                        return None
                 return info
         except yt_dlp.utils.DownloadError as e:
             msg = str(e)
