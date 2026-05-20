@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -64,7 +65,7 @@ def _resolve_query(query: str) -> str:
     Returns the effective query to pass to yt-dlp:
     - YouTube URLs  → raises YouTubeNotAllowed
     - Other URLs    → returned as-is
-    - Plain text    → prefixed with 'scsearch:'
+    - Plain text    → SoundCloud web search URL
     """
     q = query.strip()
     if _YT_RE.match(q):
@@ -75,7 +76,7 @@ def _resolve_query(query: str) -> str:
         )
     if _URL_RE.match(q):
         return q
-    return f'scsearch:{q}'
+    return f"https://soundcloud.com/search/sounds?q={urllib.parse.quote(q)}"
 
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -134,6 +135,8 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(effective, download=False)
+                if not info and not _URL_RE.match(effective):
+                    info = ydl.extract_info(f"scsearch:{query}", download=False)
                 if not info:
                     return None
                 if 'entries' in info:
@@ -164,6 +167,12 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
                     "YouTube requiere verificacion. Usa SoundCloud o configura cookies para yt-dlp."
                 ) from e
             if "soundcloud" in msg.lower() and "404" in msg:
+                if _URL_RE.match(effective) and "soundcloud.com/search/sounds" in effective:
+                    try:
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            return ydl.extract_info(f"scsearch:{query}", download=False)
+                    except Exception:
+                        pass
                 raise MediaFetchError(
                     "SoundCloud respondio 404. La pista puede estar privada o eliminada."
                 ) from e
