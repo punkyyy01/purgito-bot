@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 EMBED_COLOR = 0x8B00FF
 
 YTDL_OPTS = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio[ext=m4a]/bestaudio/best',
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
