@@ -3,6 +3,8 @@ import difflib
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -17,6 +19,7 @@ log = logging.getLogger(__name__)
 EMBED_COLOR = 0x8B00FF
 
 COOKIES_FILE = os.getenv("YTDLP_COOKIES", "/opt/bot-discord-purg/cookies.txt")
+_YTDLP_BIN = os.path.join(os.path.dirname(sys.executable), 'yt-dlp')
 
 _YT_RE = re.compile(
     r'^https?://(?:www\.|m\.|music\.)?(?:youtube\.com/|youtu\.be/)',
@@ -392,14 +395,45 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
     )
 
 
+def _fetch_youtube_stream_url(url: str) -> Optional[str]:
+    """Get a YouTube stream URL via subprocess so yt-dlp applies all transforms (n-challenge)."""
+    if not _cookies_available():
+        log.warning("fetch_stream_url: YouTube URL sin cookies")
+        return None
+    cmd = [
+        _YTDLP_BIN,
+        '-f', 'bestaudio/best',
+        '--extractor-args', 'youtube:player_client=mweb',
+        '--remote-components', 'ejs:github',
+        '--cookies', COOKIES_FILE,
+        '-g', '-q', '--no-warnings',
+        url,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            stream_url = result.stdout.strip().split('\n')[0]
+            if stream_url:
+                return stream_url
+        log.warning("fetch_stream_url: yt-dlp subprocess falló (rc=%d): %s", result.returncode, result.stderr[:200])
+        return None
+    except subprocess.TimeoutExpired:
+        log.warning("fetch_stream_url: yt-dlp subprocess timeout para %s", url)
+        return None
+    except Exception as e:
+        log.warning("fetch_stream_url: subprocess error para %s: %s", url, e)
+        return None
+
+
 async def fetch_stream_url(webpage_url: str) -> Optional[str]:
     """Re-extract a fresh direct audio stream URL just before playing.
 
-    Returns None on any failure (DRM detected late, expired URL, network blip) so
-    MusicPlayer can skip this track and advance to the next one in the queue
-    instead of crashing.
+    Returns None on any failure so MusicPlayer can skip and advance the queue.
     """
     def _extract() -> Optional[str]:
+        if _YT_RE.match(webpage_url):
+            return _fetch_youtube_stream_url(webpage_url)
+
         opts = _opts_for_url(webpage_url)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -417,9 +451,6 @@ async def fetch_stream_url(webpage_url: str) -> Optional[str]:
             entries = [e for e in info['entries'] if e]
             info = entries[0] if entries else None
         if not info:
-            return None
-        if _is_youtube_info(info) and not _cookies_available():
-            log.warning("fetch_stream_url: info de YouTube sin cookies, no se puede reproducir")
             return None
         formats = info.get('formats', [])
         audio_only = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
