@@ -48,7 +48,7 @@ def _cookies_available() -> bool:
 
 def _common_opts() -> dict:
     return {
-        'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+        'format': 'bestaudio/best',
         'noplaylist': True,
         'nocheckcertificate': True,
         'quiet': True,
