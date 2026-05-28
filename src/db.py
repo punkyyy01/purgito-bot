@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import logging
 import aiosqlite
@@ -102,6 +103,16 @@ CREATE TABLE IF NOT EXISTS frases_especiales (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_frases_especiales_guild ON frases_especiales(guild_id);
+
+CREATE TABLE IF NOT EXISTS reaction_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    emoji_text TEXT NOT NULL,
+    is_custom INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(guild_id, emoji_text)
+);
+CREATE INDEX IF NOT EXISTS idx_reaction_pool_guild ON reaction_pool(guild_id);
 """
 
 
@@ -690,3 +701,54 @@ async def delete_frase_especial(guild_id: int, frase_id: int) -> bool:
         deleted = cursor.rowcount > 0
         await db.commit()
     return deleted
+
+
+_CUSTOM_EMOJI_RE = re.compile(r"^<a?:\w+:\d+>$")
+
+
+async def add_reaction_to_pool(guild_id: int, emoji_text: str) -> bool:
+    text = (emoji_text or "").strip()
+    if not text:
+        return False
+    is_custom = 1 if _CUSTOM_EMOJI_RE.match(text) else 0
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO reaction_pool (guild_id, emoji_text, is_custom) VALUES (?, ?, ?)",
+            (guild_id, text, is_custom),
+        )
+        inserted = _was_inserted(cursor)
+        await db.commit()
+    return inserted
+
+
+async def remove_reaction_from_pool(guild_id: int, reaction_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM reaction_pool WHERE guild_id=? AND id=?",
+            (guild_id, reaction_id),
+        )
+        removed = cursor.rowcount > 0
+        await db.commit()
+    return removed
+
+
+async def list_reaction_pool(guild_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, emoji_text, is_custom FROM reaction_pool WHERE guild_id=? ORDER BY id",
+        (guild_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [{"id": r[0], "emoji_text": r[1], "is_custom": bool(r[2])} for r in rows]
+
+
+async def get_random_reaction(guild_id: int) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT emoji_text FROM reaction_pool WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return {"emoji_text": row[0]} if row else None

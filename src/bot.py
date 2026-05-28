@@ -61,6 +61,10 @@ from db import (
     list_frases_especiales,
     get_frase_especial,
     delete_frase_especial,
+    add_reaction_to_pool,
+    remove_reaction_from_pool,
+    list_reaction_pool,
+    get_random_reaction,
 )
 
 # Cargar variables de entorno
@@ -838,12 +842,12 @@ async def on_message(message: discord.Message):
                 _message_counter[key] = 0
                 auto_generate = True
 
-        # Reacción aleatoria con emoji custom del server
+        # Reacción aleatoria con emoji del pool configurable
         if random.random() < 0.05:
             try:
-                emojis = list(getattr(message.guild, "emojis", []) or [])
-                if emojis:
-                    await message.add_reaction(random.choice(emojis))
+                reaction = await get_random_reaction(message.guild.id)
+                if reaction:
+                    await message.add_reaction(reaction["emoji_text"])
             except Exception:
                 log.exception("Error añadiendo reacción emoji")
 
@@ -1698,6 +1702,70 @@ async def borrar_frase_slash(interaction: discord.Interaction, id: int):
         return
     await delete_frase_especial(interaction.guild.id, id)
     await interaction.response.send_message("✅ Frase borrada.", ephemeral=True)
+
+
+_reacciones = app_commands.Group(
+    name="reacciones",
+    description="Gestiona el pool de emojis para las reacciones automáticas",
+)
+
+
+@_reacciones.command(name="add", description="Añade un emoji al pool de reacciones automáticas.")
+@app_commands.describe(emoji="Emoji a añadir (Unicode 🔥 o custom del servidor <:nombre:id>)")
+async def reacciones_add(interaction: discord.Interaction, emoji: str):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_admin_permission(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    text = emoji.strip()
+    if not text:
+        await interaction.response.send_message("❌ El emoji no puede estar vacío.", ephemeral=True)
+        return
+    inserted = await add_reaction_to_pool(interaction.guild.id, text)
+    if inserted:
+        await interaction.response.send_message(f"✅ Emoji `{text}` añadido al pool.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Ese emoji ya estaba en el pool.", ephemeral=True)
+
+
+@_reacciones.command(name="quitar", description="Quita un emoji del pool por su ID (visible en /reacciones lista).")
+@app_commands.describe(id="ID del emoji a quitar")
+async def reacciones_quitar(interaction: discord.Interaction, id: int):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_admin_permission(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    removed = await remove_reaction_from_pool(interaction.guild.id, id)
+    if removed:
+        await interaction.response.send_message(f"✅ Emoji con ID `{id}` eliminado del pool.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ No existe un emoji con ID `{id}` en el pool.", ephemeral=True)
+
+
+@_reacciones.command(name="lista", description="Muestra todos los emojis en el pool de reacciones.")
+async def reacciones_lista(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not has_admin_permission(interaction):
+        await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    pool = await list_reaction_pool(interaction.guild.id)
+    if not pool:
+        await interaction.response.send_message("ℹ️ El pool de reacciones está vacío. Usa `/reacciones add` para añadir emojis.", ephemeral=True)
+        return
+    lines = [f"`{r['id']}` — {r['emoji_text']}" for r in pool]
+    body = "**Pool de reacciones:**\n" + "\n".join(lines)
+    if len(body) > 1900:
+        body = body[:1900] + "\n…(lista truncada)"
+    await interaction.response.send_message(body, ephemeral=True)
+
+
+bot.tree.add_command(_reacciones)
 
 
 from music_commands import register_music_commands
