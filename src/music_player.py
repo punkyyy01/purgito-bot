@@ -81,7 +81,8 @@ def _youtube_flat_opts() -> dict:
         'extract_flat': 'in_playlist',
         'default_search': 'ytsearch',
         'ignoreerrors': True,
-        'extractor_args': {'youtube': {'player_client': ['ios']}},
+        'extractor_args': {'youtube': {'player_client': ['mweb']}},
+        'remote_components': 'ejs:github',
     }
     if _cookies_available():
         opts['cookiefile'] = COOKIES_FILE
@@ -93,7 +94,8 @@ def _youtube_strict_opts() -> dict:
         **_common_opts(),
         'default_search': 'ytsearch',
         'ignoreerrors': False,
-        'extractor_args': {'youtube': {'player_client': ['ios']}},
+        'extractor_args': {'youtube': {'player_client': ['mweb']}},
+        'remote_components': 'ejs:github',
     }
     if _cookies_available():
         opts['cookiefile'] = COOKIES_FILE
