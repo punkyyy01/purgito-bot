@@ -1,8 +1,10 @@
 import asyncio
+import difflib
 import logging
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -21,6 +23,8 @@ _YT_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_RE = re.compile(r'^https?://', re.IGNORECASE)
+_PUNCT_RE = re.compile(r'[^\w\s]')
+_SPACE_RE = re.compile(r'\s+')
 
 
 class YouTubeNotAllowed(Exception):
@@ -205,8 +209,45 @@ def _friendly_message(url_or_query: str, err: Exception) -> str:
     return "No se pudo obtener la información de esa URL."
 
 
+def _normalize_text(text: str) -> str:
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    text = _PUNCT_RE.sub(' ', text.lower())
+    return _SPACE_RE.sub(' ', text).strip()
+
+
+def _title_similarity(query: str, title: str) -> float:
+    """Combined similarity score between 0.0 and 1.0.
+
+    Uses three signals:
+    - Character-level sequence ratio (catches near-identical strings)
+    - Word-level Jaccard (penalizes extra words like 'slowed', 'reverb')
+    - Query word coverage (fraction of query words present in title)
+    """
+    nq = _normalize_text(query)
+    nt = _normalize_text(title)
+
+    seq = difflib.SequenceMatcher(None, nq, nt, autojunk=False).ratio()
+
+    qw = set(nq.split())
+    tw = set(nt.split())
+    union = qw | tw
+    jaccard = len(qw & tw) / len(union) if union else 0.0
+    coverage = len(qw & tw) / len(qw) if qw else 0.0
+
+    return 0.4 * seq + 0.3 * jaccard + 0.3 * coverage
+
+
+def _score_candidate(query: str, entry: dict) -> float:
+    title = entry.get('title') or ''
+    duration = entry.get('duration')
+    score = _title_similarity(query, title)
+    if duration is not None and duration < 45:
+        score -= 1.0
+    return score
+
+
 def _resolve_soundcloud_search(query: str) -> Optional[SongInfo]:
-    """Multi-candidate SoundCloud search. Skips DRM-blocked tracks individually."""
+    """Multi-candidate SoundCloud search. Ranks by title similarity before trying."""
     try:
         candidates = _flat_search(f"scsearch10:{query}", _soundcloud_flat_opts())
     except Exception as e:  # noqa: BLE001 — flat search is best-effort
@@ -217,23 +258,26 @@ def _resolve_soundcloud_search(query: str) -> Optional[SongInfo]:
         log.info("soundcloud: sin candidatos para '%s'", query)
         return None
 
+    ranked = sorted(candidates, key=lambda e: _score_candidate(query, e), reverse=True)
+
     strict_opts = _soundcloud_strict_opts()
-    for idx, entry in enumerate(candidates, start=1):
+    for idx, entry in enumerate(ranked, start=1):
         url = _candidate_url(entry)
         if not url:
             continue
         hint = entry.get('title') or url
+        score = _score_candidate(query, entry)
         try:
             info = _extract_full(url, strict_opts)
         except yt_dlp.utils.DownloadError as e:
-            log.info("soundcloud: candidato %d (%s) descartado: %s", idx, hint, e)
+            log.info("soundcloud: candidato %d (%s, score=%.2f) descartado: %s", idx, hint, score, e)
             continue
         except yt_dlp.utils.ExtractorError as e:
-            log.info("soundcloud: candidato %d (%s) error extractor: %s", idx, hint, e)
+            log.info("soundcloud: candidato %d (%s, score=%.2f) error extractor: %s", idx, hint, score, e)
             continue
         if not info:
             continue
-        log.info("soundcloud: candidato %d (%s) reproducible", idx, hint)
+        log.info("soundcloud: candidato %d (%s, score=%.2f) reproducible", idx, hint, score)
         return _song_from_info(info, url)
 
     log.info("soundcloud: %d candidatos agotados sin éxito para '%s'", len(candidates), query)
@@ -256,23 +300,26 @@ def _resolve_youtube_search(query: str) -> Optional[SongInfo]:
         log.info("youtube: sin candidatos para '%s'", query)
         return None
 
+    ranked = sorted(candidates, key=lambda e: _score_candidate(query, e), reverse=True)
+
     strict_opts = _youtube_strict_opts()
-    for idx, entry in enumerate(candidates, start=1):
+    for idx, entry in enumerate(ranked, start=1):
         url = _candidate_url(entry)
         if not url:
             continue
         hint = entry.get('title') or url
+        score = _score_candidate(query, entry)
         try:
             info = _extract_full(url, strict_opts)
         except yt_dlp.utils.DownloadError as e:
-            log.info("youtube: candidato %d (%s) descartado: %s", idx, hint, e)
+            log.info("youtube: candidato %d (%s, score=%.2f) descartado: %s", idx, hint, score, e)
             continue
         except yt_dlp.utils.ExtractorError as e:
-            log.info("youtube: candidato %d (%s) error extractor: %s", idx, hint, e)
+            log.info("youtube: candidato %d (%s, score=%.2f) error extractor: %s", idx, hint, score, e)
             continue
         if not info:
             continue
-        log.info("youtube: candidato %d (%s) reproducible", idx, hint)
+        log.info("youtube: candidato %d (%s, score=%.2f) reproducible", idx, hint, score)
         return _song_from_info(info, url)
 
     log.info("youtube: %d candidatos agotados sin éxito para '%s'", len(candidates), query)
@@ -329,10 +376,10 @@ async def fetch_song(query: str) -> Optional[SongInfo]:
         return await loop.run_in_executor(None, _resolve_direct_url, q)
 
     def _resolve_chain() -> Optional[SongInfo]:
-        song = _resolve_soundcloud_search(q)
+        song = _resolve_youtube_search(q)
         if song:
             return song
-        return _resolve_youtube_search(q)
+        return _resolve_soundcloud_search(q)
 
     song = await loop.run_in_executor(None, _resolve_chain)
     if song:
