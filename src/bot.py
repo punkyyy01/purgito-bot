@@ -73,6 +73,14 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().lower() in ("1", "true", "yes")
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+BOT_TRIGGER_NAME = os.getenv("BOT_TRIGGER_NAME", "artemis").strip().lower()
+HOME_GUILD_ID: int | None = int(os.getenv("HOME_GUILD_ID", "0")) or None
+
+
+def is_home_guild(guild_id: int | None) -> bool:
+    if HOME_GUILD_ID is None:
+        return False
+    return guild_id == HOME_GUILD_ID
 
 
 def _env_int(name: str, default: int) -> int:
@@ -140,7 +148,10 @@ _corpus_insert_counter: _LRUDict = _LRUDict(256)
 _user_markov_cache: _LRUDict = _LRUDict(64)
 _user_corpus_insert_counter: _LRUDict = _LRUDict(256)
 _momo_cooldowns: dict[tuple[int, int], float] = {}
+_groq_cooldowns: dict[int, float] = {}
 _last_meme_image: dict[int, str] = {}
+
+_GROQ_GUILD_COOLDOWN = 10.0
 
 _GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
 _REFEED_MAX_MESSAGES = _env_int("REFEED_MAX_MESSAGES", 80_000)
@@ -149,14 +160,27 @@ _MARKOV_TRAINING_MESSAGES = _env_int("MARKOV_TRAINING_MESSAGES", 5_000)
 _USER_MARKOV_TRAINING_MESSAGES = _env_int("USER_MARKOV_TRAINING_MESSAGES", 2_000)
 SPECIAL_PHRASE_PROBABILITY = 0.20
 
-_r2_client = boto3.client(
-    "s3",
-    endpoint_url=os.getenv("R2_ENDPOINT_URL"),
-    aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
-    config=Config(signature_version="s3v4"),
-    region_name="auto",
-)
+_R2_ENDPOINT = os.getenv("R2_ENDPOINT_URL", "").strip()
+_R2_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+_R2_SECRET = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+_R2_BUCKET = os.getenv("R2_BUCKET_NAME", "").strip()
+_R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip()
+
+if _R2_ENDPOINT and _R2_KEY_ID and _R2_SECRET and _R2_BUCKET:
+    _r2_client = boto3.client(
+        "s3",
+        endpoint_url=_R2_ENDPOINT,
+        aws_access_key_id=_R2_KEY_ID,
+        aws_secret_access_key=_R2_SECRET,
+        config=Config(signature_version="s3v4"),
+        region_name="auto",
+    )
+else:
+    _r2_client = None
+
+
+def _r2_available() -> bool:
+    return _r2_client is not None
 
 from groq import AsyncGroq
 _groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -225,7 +249,7 @@ _EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', re
 # Postproceso para recortar muletillas y finales raros.
 def post_process_reply(text: str) -> str:
     if not text:
-        return "me quedé en blanco, pregunta de nuevo"
+        return "no pude generar una respuesta, intenta de nuevo"
 
     # Limpieza básica
     text = text.lower().strip()
@@ -245,7 +269,7 @@ def post_process_reply(text: str) -> str:
         text = text.rstrip(".")
 
     if not text.strip():
-        text = "no sé xd"
+        text = "no tengo respuesta para eso"
 
     return text.strip()
 
@@ -375,6 +399,8 @@ async def generate_response(guild_id: int) -> tuple[str | None, bool]:
 
 
 def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
+    if not _r2_available():
+        return None
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
         resp = requests.get(url, headers=headers, timeout=15)
@@ -384,12 +410,12 @@ def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
         data = resp.content
         key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}.gif"
         _r2_client.put_object(
-            Bucket=os.getenv("R2_BUCKET_NAME", ""),
+            Bucket=_R2_BUCKET,
             Key=key,
             Body=data,
             ContentType="image/gif",
         )
-        return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
+        return f"{_R2_PUBLIC_URL.rstrip('/')}/{key}"
     except Exception:
         log.exception("Error subiendo GIF a R2: %s", url)
         return None
@@ -404,6 +430,8 @@ _IMAGE_CONTENT_TYPES = {
 
 
 def upload_image_to_r2_sync(url: str, guild_id: int, ext: str) -> str | None:
+    if not _r2_available():
+        return None
     content_type = _IMAGE_CONTENT_TYPES.get(ext.lower(), "image/png")
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
@@ -414,12 +442,12 @@ def upload_image_to_r2_sync(url: str, guild_id: int, ext: str) -> str | None:
         data = resp.content
         key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}{ext}"
         _r2_client.put_object(
-            Bucket=os.getenv("R2_BUCKET_NAME", ""),
+            Bucket=_R2_BUCKET,
             Key=key,
             Body=data,
             ContentType=content_type,
         )
-        return f"{os.getenv('R2_PUBLIC_URL', '').rstrip('/')}/{key}"
+        return f"{_R2_PUBLIC_URL.rstrip('/')}/{key}"
     except Exception:
         log.exception("Error subiendo imagen a R2: %s", url)
         return None
@@ -430,6 +458,9 @@ _MEME_MAX_BYTES = 10 * 1024 * 1024
 
 
 async def handle_meme_command(message: discord.Message) -> None:
+    if not is_home_guild(message.guild.id if message.guild else None):
+        return
+
     log.info(
         "handle_meme_command: message_id=%s content=%r has_reference=%s ref_message_id=%s",
         message.id,
@@ -462,25 +493,25 @@ async def handle_meme_command(message: discord.Message) -> None:
     )
     if image_att is None:
         log.info("handle_meme_command: no se encontró attachment de imagen en el mensaje referenciado")
-        await message.reply("necesito una imagen pa generar el momo")
+        await message.reply("necesito que respondas a un mensaje que tenga una imagen")
         return
 
     log.info("handle_meme_command: imagen encontrada filename=%r size=%d bytes", image_att.filename, image_att.size)
 
     if image_att.size > _MEME_MAX_BYTES:
-        await message.reply("la imagen pesa mucho")
+        await message.reply("la imagen supera el límite de 10MB")
         return
 
     try:
         img_bytes = await image_att.read()
     except Exception:
         log.exception("Error descargando imagen para meme")
-        await message.reply("se rompio algo")
+        await message.reply("ocurrió un error, intenta de nuevo")
         return
 
     if not message.guild:
         log.info("handle_meme_command: mensaje fuera de guild, no hay modelo Markov disponible")
-        await message.reply("no me salio nada, intenta de nuevo")
+        await message.reply("no pude generar el meme, intenta de nuevo")
         return
 
     log.info("handle_meme_command: generando caption")
@@ -489,21 +520,21 @@ async def handle_meme_command(message: discord.Message) -> None:
     if _groq_client:
         corpus_sample = await get_corpus_messages_filtered(message.guild.id, min_words=1, limit=400)
         if corpus_sample:
-            text = await generate_groq_meme_caption(img_bytes, corpus_sample)
+            text = await generate_groq_meme_caption(img_bytes, corpus_sample, guild_id=message.guild.id)
     if not text:
         model = await build_markov_model(message.guild.id)
         if model and not model.is_empty:
             text = await asyncio.to_thread(_try_short_sentence, model)
     log.info("handle_meme_command: texto generado=%r", text)
     if not text:
-        await message.reply("no me salio nada, intenta de nuevo")
+        await message.reply("no pude generar el meme, intenta de nuevo")
         return
 
     try:
         meme_bytes = await asyncio.to_thread(render_caption, img_bytes, text)
     except Exception:
         log.exception("Error generando meme con Pillow")
-        await message.reply("se rompio algo")
+        await message.reply("ocurrió un error, intenta de nuevo")
         return
 
     await message.reply(file=discord.File(io.BytesIO(meme_bytes), filename="meme.png"))
@@ -572,10 +603,18 @@ def _detect_image_mime(image_bytes: bytes) -> str:
 async def generate_groq_meme_caption(
     image_bytes: bytes,
     corpus_sample: list[str],
+    guild_id: int = 0,
 ) -> str | None:
     if not _groq_client:
-        log.warning("GROQ_API_KEY no configurada")
         return None
+
+    import time as _time
+    now = _time.monotonic()
+    if guild_id and now - _groq_cooldowns.get(guild_id, 0.0) < _GROQ_GUILD_COOLDOWN:
+        log.debug("Groq cooldown activo para guild %s, fallback a Markov", guild_id)
+        return None
+    if guild_id:
+        _groq_cooldowns[guild_id] = now
 
     import base64
     mime_type = _detect_image_mime(image_bytes)
@@ -654,6 +693,8 @@ async def auto_meme_task():
 
             # Obtener imagen válida del pool (con eviction lazy de URLs expiradas)
             guild_id = schedule["guild_id"]
+            if not is_home_guild(guild_id):
+                continue
             img_bytes = None
             image_url = None
             last = _last_meme_image.get(guild_id)
@@ -693,7 +734,7 @@ async def auto_meme_task():
             # Generar caption con Groq, con fallback a Markov si falla
             caption = None
             if _groq_client:
-                caption = await generate_groq_meme_caption(img_bytes, corpus_sample)
+                caption = await generate_groq_meme_caption(img_bytes, corpus_sample, guild_id=guild_id)
             if not caption:
                 model = await build_markov_model(guild_id)
                 caption = await asyncio.to_thread(
@@ -732,6 +773,15 @@ async def on_ready():
     if not auto_meme_task.is_running():
         auto_meme_task.start()
 
+    if not _r2_available():
+        log.warning(
+            "R2 no configurado: las imágenes de Discord CDN se guardarán con su URL original "
+            "(pueden expirar). Configura R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, "
+            "R2_BUCKET_NAME y R2_PUBLIC_URL para persistencia permanente."
+        )
+    if not _groq_client:
+        log.info("GROQ_API_KEY no configurada: captions de memes usarán solo Markov.")
+
     try:
         log.info("Iniciando sincronización de comandos")
 
@@ -767,7 +817,7 @@ async def on_command_error(ctx: commands.Context, error: Exception):
 
 def _is_meme_trigger(message: discord.Message) -> bool:
     parts = (message.content or "").strip().lower().split()
-    if parts == ["artemis", "generar"]:
+    if parts == [BOT_TRIGGER_NAME, "generar"]:
         return True
     if bot.user:
         for mention in (f"<@{bot.user.id}>", f"<@!{bot.user.id}>"):
@@ -909,6 +959,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
     if payload.guild_id is None:
         return
+    if not is_home_guild(payload.guild_id):
+        return
     channel = bot.get_channel(payload.channel_id)
     if not isinstance(channel, discord.TextChannel):
         return
@@ -924,16 +976,19 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if ext in {".png", ".jpg", ".jpeg", ".webp"} \
                 and attachment.size <= _MEME_MAX_BYTES:
             try:
-                r2_url = await asyncio.to_thread(
-                    upload_image_to_r2_sync, attachment.url, payload.guild_id, ext
-                )
-                if not r2_url:
-                    log.warning("No se pudo subir imagen a R2: %s", attachment.url)
-                    continue
-                inserted = await save_image_url(payload.guild_id, r2_url)
+                if _r2_available():
+                    final_url = await asyncio.to_thread(
+                        upload_image_to_r2_sync, attachment.url, payload.guild_id, ext
+                    )
+                    if not final_url:
+                        log.warning("No se pudo subir imagen a R2, usando URL original: %s", attachment.url)
+                        final_url = attachment.url
+                else:
+                    final_url = attachment.url
+                inserted = await save_image_url(payload.guild_id, final_url)
                 if inserted:
                     added = True
-                    log.info("Imagen agregada al pool 🎯 (R2): %s", r2_url)
+                    log.info("Imagen agregada al pool 🎯: %s", final_url)
             except Exception:
                 log.exception("Error guardando imagen por reaccion")
     if added:
@@ -1245,6 +1300,9 @@ async def gif_add_slash(interaction: discord.Interaction, url: str):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
 
     await interaction.response.defer(ephemeral=True)
 
@@ -1496,6 +1554,9 @@ async def meme_auto_activar(interaction: discord.Interaction, canal: discord.Tex
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     if intervalo < 2:
         await interaction.response.send_message("el intervalo mínimo es 2 horas", ephemeral=True)
         return
@@ -1518,6 +1579,9 @@ async def meme_auto_desactivar(interaction: discord.Interaction, canal: discord.
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     removed = await remove_meme_schedule(interaction.guild.id, canal.id)
     if removed:
         await interaction.response.send_message(
@@ -1538,6 +1602,9 @@ async def meme_auto_lista(interaction: discord.Interaction):
         return
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+        return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     schedules = await list_meme_schedules(interaction.guild.id)
     if not schedules:
@@ -1568,6 +1635,9 @@ bot.tree.add_command(_meme_auto)
 
 @bot.tree.command(name="momo", description="Genera un meme del server.")
 async def momo_slash(interaction: discord.Interaction):
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     import time
     now = time.time()
     cooldown_key = (interaction.guild_id or 0, interaction.user.id)
@@ -1575,7 +1645,7 @@ async def momo_slash(interaction: discord.Interaction):
     if now - last < 45:
         remaining = int(45 - (now - last))
         await interaction.response.send_message(
-            f"espera {remaining}s antes de generar otro meme",
+            f"espera {remaining} segundos antes de generar otro meme",
             ephemeral=True
         )
         return
@@ -1623,7 +1693,7 @@ async def momo_slash(interaction: discord.Interaction):
             await interaction.followup.send("El corpus está vacío.", ephemeral=True)
             return
 
-        caption = await generate_groq_meme_caption(img_bytes, corpus_sample)
+        caption = await generate_groq_meme_caption(img_bytes, corpus_sample, guild_id=guild_id)
         if caption is None:
             model = await build_markov_model(guild_id)
             caption = await asyncio.to_thread(
@@ -1646,6 +1716,9 @@ async def momo_slash(interaction: discord.Interaction):
 
 @bot.tree.command(name="meme", description="Genera un meme del server.")
 async def meme_slash(interaction: discord.Interaction):
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     await momo_slash.callback(interaction)
 
 
@@ -1654,6 +1727,9 @@ async def meme_slash(interaction: discord.Interaction):
 async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     texto = frase.strip()
     if not texto:
@@ -1667,6 +1743,9 @@ async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
 async def ver_frases_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     frases = await list_frases_especiales(interaction.guild.id)
@@ -1688,6 +1767,9 @@ async def ver_frases_slash(interaction: discord.Interaction):
 async def borrar_frase_slash(interaction: discord.Interaction, id: int):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+        return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     frase = await get_frase_especial(interaction.guild.id, id)
     if frase is None:
@@ -1719,6 +1801,9 @@ async def reacciones_add(interaction: discord.Interaction, emoji: str):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     text = emoji.strip()
     if not text:
         await interaction.response.send_message("❌ El emoji no puede estar vacío.", ephemeral=True)
@@ -1739,6 +1824,9 @@ async def reacciones_quitar(interaction: discord.Interaction, id: int):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     removed = await remove_reaction_from_pool(interaction.guild.id, id)
     if removed:
         await interaction.response.send_message(f"✅ Emoji con ID `{id}` eliminado del pool.", ephemeral=True)
@@ -1754,6 +1842,9 @@ async def reacciones_lista(interaction: discord.Interaction):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
+    if not is_home_guild(interaction.guild_id):
+        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+        return
     pool = await list_reaction_pool(interaction.guild.id)
     if not pool:
         await interaction.response.send_message("ℹ️ El pool de reacciones está vacío. Usa `/reacciones add` para añadir emojis.", ephemeral=True)
@@ -1766,6 +1857,107 @@ async def reacciones_lista(interaction: discord.Interaction):
 
 
 bot.tree.add_command(_reacciones)
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    trigger = BOT_TRIGGER_NAME
+    welcome = (
+        f"¡Hola! Soy un bot de Markov que aprende a hablar como tu servidor.\n\n"
+        f"**Para empezar:**\n"
+        f"• Corre `/refeed_all` para importar el historial de mensajes al corpus (necesita permiso *Gestionar servidor*)\n"
+        f"• Reacciona a imágenes con 🎯 para agregarlas al pool de `/momo`\n\n"
+        f"**Comandos principales:**\n"
+        f"🤖 `/generar` — genera un mensaje con Markov\n"
+        f"🎭 `/imitar @usuario` — imita el estilo de un miembro\n"
+        f"😂 `/momo` — genera un meme del server\n"
+        f"🎵 `/play <canción>` — reproduce música\n"
+        f"💬 `/chatmode` — activa/desactiva respuestas al mencionarme\n"
+        f"📺 `/youtube_add` — notificaciones de YouTube\n"
+        f"⚙️ `/help` — lista completa de comandos\n\n"
+        f"También respondo a `{trigger} generar` (reply a imagen) para generar un meme rápido."
+    )
+    for channel in guild.text_channels:
+        perms = channel.permissions_for(guild.me)
+        if perms.send_messages:
+            try:
+                embed = discord.Embed(description=welcome, color=0x8B00FF)
+                await channel.send(embed=embed)
+            except Exception:
+                log.warning("on_guild_join: no se pudo enviar mensaje en %s (%s)", channel.id, guild.id)
+            break
+
+
+@bot.tree.command(name="help", description="Muestra todos los comandos disponibles del bot.")
+async def help_slash(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="Comandos del bot",
+        color=0x8B00FF,
+    )
+    embed.add_field(
+        name="🎵 Música",
+        value=(
+            "`/play <query>` — reproduce o encola una canción\n"
+            "`/skip` — salta la canción actual\n"
+            "`/stop` — detiene y vacía la cola\n"
+            "`/pause` / `/resume` — pausa o reanuda\n"
+            "`/nowplaying` — muestra la canción actual\n"
+            "`/queue` — muestra la cola\n"
+            "`/volume <1-100>` — ajusta el volumen\n"
+            "`/loop` — alterna loop: off / canción / cola\n"
+            "`/shuffle` — mezcla la cola\n"
+            "`/leave` — sale del canal de voz"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 Markov / Chat",
+        value=(
+            "`/generar` — genera un mensaje con Markov\n"
+            "`/imitar @usuario` — imita el estilo de un miembro\n"
+            "`/chatmode on|off [#canal]` — activa/desactiva auto-reply\n"
+            "`/corpus_info` — mensajes en el corpus del canal\n"
+            "`/añadir_frase <texto>` — agrega una frase especial al pool\n"
+            "`/ver_frases` — lista las frases especiales\n"
+            "`/borrar_frase <id>` — borra una frase especial"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="😂 Memes",
+        value=(
+            "`/momo` / `/meme` — genera un meme del pool de imágenes\n"
+            f"`{BOT_TRIGGER_NAME} generar` *(reply a imagen)* — meme de esa imagen\n"
+            "`/meme_auto activar #canal <horas>` — memes automáticos\n"
+            "`/meme_auto desactivar #canal` — desactiva memes automáticos\n"
+            "`/meme_auto lista` — canales con memes automáticos"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📺 YouTube",
+        value=(
+            "`/youtube_add <id> #canal [rol]` — suscribe un canal de YouTube\n"
+            "`/youtube_remove <id>` — elimina una suscripción\n"
+            "`/youtube_list` — lista suscripciones activas\n"
+            "`/youtube_set_mention <id> [rol]` — configura mención"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚙️ Administración",
+        value=(
+            "`/refeed` — importa mensajes del canal al corpus\n"
+            "`/refeed_all` — importa todos los canales\n"
+            "`/corpus_wipe` — borra el corpus del servidor\n"
+            "`/corpus_ignorar add|quitar|lista` — gestiona canales ignorados\n"
+            "`/gif_add <url>` — agrega un GIF a la colección\n"
+            "`/reacciones add|quitar|lista` — pool de emojis de reacción\n"
+            "`!ping` — verifica que el bot está online"
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 from music_commands import register_music_commands
