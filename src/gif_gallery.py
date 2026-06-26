@@ -82,6 +82,7 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
       color: var(--muted);
     }
     #counter em { font-style: normal; font-weight: 700; color: var(--purple2); }
+    #cstats { letter-spacing: 0.12em; }
 
     /* ── TOOLBAR ──────────────────────────────────── */
     .toolbar {
@@ -181,19 +182,47 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
       object-fit: cover;
       display: block;
     }
-    .card.broken img { visibility: hidden; }
-    .card.broken::before {
-      content: 'VOID';
+
+    /* image failed — hide it cleanly */
+    .card.broken img { display: none; }
+
+    /* link-card variant */
+    .card.is-link {
+      cursor: pointer;
+      border-color: rgba(107,33,168,0.2);
+      background: var(--bg);
+    }
+    .card.is-link:hover {
+      border-color: rgba(147,51,234,0.58);
+      box-shadow: 0 8px 28px rgba(107,33,168,0.22);
+    }
+
+    .link-label {
       position: absolute;
       inset: 0;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.8rem;
-      color: var(--border);
-      letter-spacing: 0.15em;
+      gap: 0.4rem;
+      pointer-events: none;
+      z-index: 1;
     }
+    .lk-icon {
+      font-size: 1.5rem;
+      line-height: 1;
+      opacity: 0.55;
+      transition: opacity 0.18s;
+    }
+    .card.is-link:hover .lk-icon { opacity: 0.9; }
+    .lk-text {
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+      text-transform: uppercase;
+      transition: color 0.18s;
+    }
+    .card.is-link:hover .lk-text { color: var(--purple2); }
 
     /* ── OVERLAY ──────────────────────────────────── */
     .overlay {
@@ -206,6 +235,7 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
       padding: 0.4rem;
       opacity: 0;
       transition: opacity 0.18s ease;
+      z-index: 2;
     }
     .card:hover .overlay,
     .overlay.pin { opacity: 1; }
@@ -329,7 +359,9 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
 
 <header>
   <h1><span class="sk">☠</span> PURG4TORY GIF VAULT <span class="sk">☠</span></h1>
-  <div id="counter"><em id="total">—</em> GIFs IN THE VOID</div>
+  <div id="counter">
+    <em id="total">—</em> GIFs<span id="cstats"> — <em id="stat-prev">0</em> con preview · <em id="stat-link">0</em> como link</span>
+  </div>
 </header>
 
 <div class="toolbar">
@@ -354,11 +386,24 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
 
 const PAGE = 30;
 let pool = [];
+let cntPreview = 0;
+let cntLink = 0;
 
 const $ = id => document.getElementById(id);
 
 // ── Counter ────────────────────────────────────────
 function setTotal(n) { $('total').textContent = n; }
+
+function updateStats() {
+  $('stat-prev').textContent = cntPreview;
+  $('stat-link').textContent = cntLink;
+}
+
+function resetStats() {
+  cntPreview = 0;
+  cntLink = 0;
+  updateStats();
+}
 
 // ── Toast ──────────────────────────────────────────
 let _tt = null;
@@ -393,7 +438,40 @@ function mkCard(gif) {
   img.loading = 'lazy';
   img.src = gif.url;
   img.alt = '';
-  img.addEventListener('error', () => card.classList.add('broken'));
+
+  img.addEventListener('load', () => {
+    if (!card.isConnected) return;
+    card.dataset.type = 'preview';
+    cntPreview++;
+    updateStats();
+  });
+
+  img.addEventListener('error', () => {
+    if (!card.isConnected) return;
+    card.classList.add('broken', 'is-link');
+    img.style.display = 'none';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'link-label';
+    const icon = document.createElement('span');
+    icon.className = 'lk-icon';
+    icon.textContent = '⛓';
+    const txt = document.createElement('span');
+    txt.className = 'lk-text';
+    txt.textContent = 'Abrir GIF';
+    lbl.appendChild(icon);
+    lbl.appendChild(txt);
+    card.insertBefore(lbl, ov);
+
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.overlay')) return;
+      window.open(gif.url, '_blank', 'noopener,noreferrer');
+    });
+
+    card.dataset.type = 'link';
+    cntLink++;
+    updateStats();
+  });
 
   const ov = document.createElement('div');
   ov.className = 'overlay';
@@ -455,6 +533,10 @@ async function execDelete(id, card, ov) {
     }
     const data = await res.json();
     if (data.deleted) {
+      const type = card.dataset.type;
+      if (type === 'preview') cntPreview = Math.max(0, cntPreview - 1);
+      else if (type === 'link') cntLink = Math.max(0, cntLink - 1);
+      updateStats();
       card.classList.add('out');
       pool = pool.filter(g => g.id !== id);
       setTotal(pool.length);
@@ -484,6 +566,7 @@ function renderBatch() {
 async function loadGifs() {
   const grid = $('grid');
   grid.innerHTML = '<div class="spinner"></div>';
+  resetStats();
   try {
     const res = await fetch('/api/gifs');
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -494,7 +577,13 @@ async function loadGifs() {
     if (pool.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-      empty.innerHTML = '<div class="empty-title">VAULT VACÍO</div><p>Agrega un GIF usando el formulario.</p>';
+      const title = document.createElement('div');
+      title.className = 'empty-title';
+      title.textContent = 'VAULT VACÍO';
+      const p = document.createElement('p');
+      p.textContent = 'Agrega un GIF usando el formulario.';
+      empty.appendChild(title);
+      empty.appendChild(p);
       grid.appendChild(empty);
       $('btn-more').style.display = 'none';
       return;
@@ -503,7 +592,9 @@ async function loadGifs() {
   } catch (e) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.innerHTML = '<p>Error cargando GIFs: ' + e.message + '</p>';
+    const p = document.createElement('p');
+    p.textContent = 'Error cargando GIFs: ' + e.message;
+    empty.appendChild(p);
     grid.innerHTML = '';
     grid.appendChild(empty);
     showToast('No se pudo conectar con la API', 'err');
