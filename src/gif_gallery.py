@@ -160,6 +160,7 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
       border: 1px solid var(--border);
       background: var(--bg2);
       aspect-ratio: 4 / 3;
+      cursor: pointer;
       transition:
         transform 0.2s ease,
         box-shadow 0.2s ease,
@@ -434,23 +435,20 @@ function mkCard(gif) {
   card.className = 'card';
   card.dataset.gid = gif.id;
 
-  const img = document.createElement('img');
-  img.loading = 'lazy';
-  img.src = gif.url;
-  img.alt = '';
-
-  img.addEventListener('load', () => {
-    if (!card.isConnected) return;
-    card.dataset.type = 'preview';
-    cntPreview++;
-    updateStats();
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.overlay')) return;
+    window.open(gif.url, '_blank', 'noopener,noreferrer');
   });
 
-  img.addEventListener('error', () => {
-    if (!card.isConnected) return;
-    card.classList.add('broken', 'is-link');
-    img.style.display = 'none';
-
+  if (gif.media_url) {
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = gif.media_url;
+    img.alt = '';
+    card.appendChild(img);
+    card.dataset.type = 'preview';
+  } else {
+    card.classList.add('is-link');
     const lbl = document.createElement('div');
     lbl.className = 'link-label';
     const icon = document.createElement('span');
@@ -461,23 +459,13 @@ function mkCard(gif) {
     txt.textContent = 'Abrir GIF';
     lbl.appendChild(icon);
     lbl.appendChild(txt);
-    card.insertBefore(lbl, ov);
-
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.overlay')) return;
-      window.open(gif.url, '_blank', 'noopener,noreferrer');
-    });
-
+    card.appendChild(lbl);
     card.dataset.type = 'link';
-    cntLink++;
-    updateStats();
-  });
+  }
 
   const ov = document.createElement('div');
   ov.className = 'overlay';
   attachDelBtn(ov, gif.id, card);
-
-  card.appendChild(img);
   card.appendChild(ov);
   return card;
 }
@@ -489,7 +477,7 @@ function attachDelBtn(ov, id, card) {
   btn.className = 'del-btn';
   btn.textContent = '✕';
   btn.title = 'Eliminar GIF';
-  btn.addEventListener('click', () => askConfirm(ov, id, card));
+  btn.addEventListener('click', (e) => { e.stopPropagation(); askConfirm(ov, id, card); });
   ov.appendChild(btn);
 }
 
@@ -573,6 +561,9 @@ async function loadGifs() {
     const data = await res.json();
     pool = data.gifs;
     setTotal(data.total);
+    cntPreview = pool.filter(g => g.media_url).length;
+    cntLink = pool.filter(g => !g.media_url).length;
+    updateStats();
     grid.innerHTML = '';
     if (pool.length === 0) {
       const empty = document.createElement('div');

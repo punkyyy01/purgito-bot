@@ -38,6 +38,8 @@ from db import (
     count_gif_urls,
     list_gif_urls,
     delete_gif_url_by_id,
+    update_gif_media_url,
+    get_unresolved_gifs,
     add_youtube_sub,
     remove_youtube_sub,
     list_youtube_subs,
@@ -557,6 +559,39 @@ async def handle_meme_command(message: discord.Message) -> None:
     await message.reply(file=discord.File(io.BytesIO(meme_bytes), filename="meme.png"))
 
 
+async def resolve_media_url(url: str) -> str | None:
+    try:
+        if "cdn.discordapp.com" in url or (_R2_PUBLIC_URL and url.startswith(_R2_PUBLIC_URL)):
+            return url
+        if "tenor.com" in url:
+            resp = await asyncio.to_thread(
+                requests.get, f"https://tenor.com/oembed?url={url}&format=json", timeout=8
+            )
+            return resp.json()["url"]
+        if "giphy.com" in url:
+            resp = await asyncio.to_thread(
+                requests.get, f"https://giphy.com/services/oembed?url={url}&format=json", timeout=8
+            )
+            return resp.json()["thumbnail_url"]
+    except Exception:
+        return None
+    return None
+
+
+@tasks.loop(seconds=90)
+async def resolve_gifs_task():
+    gifs = await get_unresolved_gifs(PURGATORY_GUILD_ID, limit=25)
+    if not gifs:
+        log.info("Todos los GIFs resueltos")
+        resolve_gifs_task.stop()
+        return
+    for gif in gifs:
+        resolved = await resolve_media_url(gif["url"])
+        if resolved is not None:
+            await update_gif_media_url(gif["id"], resolved)
+        await asyncio.sleep(1.5)
+
+
 # --- WEB API ---
 
 def _rate_ok(store: dict[str, list[float]], ip: str, limit: int, window: float = 60.0) -> bool:
@@ -882,6 +917,8 @@ async def on_ready():
         check_youtube.start()
     if not auto_meme_task.is_running():
         auto_meme_task.start()
+    if not resolve_gifs_task.is_running():
+        resolve_gifs_task.start()
     try:
         await start_web_server()
     except Exception:

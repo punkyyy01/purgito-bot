@@ -132,6 +132,11 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna mention_role_id ya existe en youtube_subscriptions")
+    try:
+        await _db.execute("ALTER TABLE corpus_gifs ADD COLUMN media_url TEXT")
+        await _db.commit()
+    except Exception:
+        log.debug("Columna media_url ya existe en corpus_gifs")
     await _db.commit()
     flag_path = os.path.join(DATA_DIR, ".images_wiped_v2")
     if not os.path.exists(flag_path):
@@ -323,11 +328,31 @@ async def count_gif_urls(guild_id: int) -> int:
 async def list_gif_urls(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, url, created_at FROM corpus_gifs WHERE guild_id=? ORDER BY id",
+        "SELECT id, url, created_at, media_url FROM corpus_gifs WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
         rows = await cursor.fetchall()
-    return [{"id": r[0], "url": r[1], "created_at": r[2]} for r in rows]
+    return [{"id": r[0], "url": r[1], "created_at": r[2], "media_url": r[3]} for r in rows]
+
+
+async def update_gif_media_url(gif_id: int, media_url: str) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "UPDATE corpus_gifs SET media_url=? WHERE id=?",
+            (media_url, gif_id),
+        )
+        await db.commit()
+
+
+async def get_unresolved_gifs(guild_id: int, limit: int = 30) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, url FROM corpus_gifs WHERE guild_id=? AND media_url IS NULL ORDER BY id LIMIT ?",
+        (guild_id, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [{"id": r[0], "url": r[1]} for r in rows]
 
 
 async def delete_gif_url_by_id(guild_id: int, gif_id: int) -> bool:
