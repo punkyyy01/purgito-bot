@@ -154,6 +154,9 @@ GIF_GALLERY_HTML: str = """<!DOCTYPE html>
 
     /* ── CARD ─────────────────────────────────────── */
     .card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
       position: relative;
       border-radius: 5px;
       overflow: hidden;
@@ -430,23 +433,67 @@ function syncMore() {
 }
 
 // ── Card factory ───────────────────────────────────
+function classifyGif(gif) {
+  if (gif.media_url) return { type: 'img', src: gif.media_url };
+  const u = gif.url;
+  if (u.includes('cdn.discordapp.com')) return { type: 'img', src: u };
+  if (u.includes('giphy.com/gifs/')) {
+    const parts = u.split('/gifs/').pop().split('-');
+    const id = parts[parts.length - 1];
+    return { type: 'img', src: `https://media.giphy.com/media/${id}/giphy.gif` };
+  }
+  if (u.includes('tenor.com/view/')) {
+    const parts = u.split('/');
+    const id = parts[parts.length - 1].split('-').pop();
+    return { type: 'iframe', src: `https://tenor.com/embed/${id}` };
+  }
+  return { type: 'link', src: null };
+}
+
 function mkCard(gif) {
-  const card = document.createElement('div');
+  const { type, src } = classifyGif(gif);
+
+  const card = document.createElement('a');
   card.className = 'card';
+  card.href = gif.url;
+  card.target = '_blank';
+  card.rel = 'noopener noreferrer';
   card.dataset.gid = gif.id;
+  card.dataset.type = type !== 'link' ? 'preview' : 'link';
 
-  card.addEventListener('click', (e) => {
-    if (e.target.closest('.overlay')) return;
-    window.open(gif.url, '_blank', 'noopener,noreferrer');
-  });
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
 
-  if (gif.media_url) {
+  if (type === 'img') {
     const img = document.createElement('img');
     img.loading = 'lazy';
-    img.src = gif.media_url;
+    img.src = src;
     img.alt = '';
+    img.onerror = () => {
+      img.remove();
+      card.classList.add('is-link');
+      card.dataset.type = 'link';
+      const lbl = document.createElement('div');
+      lbl.className = 'link-label';
+      const icon = document.createElement('span');
+      icon.className = 'lk-icon';
+      icon.textContent = '⛓';
+      const txt = document.createElement('span');
+      txt.className = 'lk-text';
+      txt.textContent = 'Abrir GIF';
+      lbl.appendChild(icon);
+      lbl.appendChild(txt);
+      card.insertBefore(lbl, ov);
+    };
     card.appendChild(img);
-    card.dataset.type = 'preview';
+  } else if (type === 'iframe') {
+    const iframe = document.createElement('iframe');
+    iframe.loading = 'lazy';
+    iframe.src = src;
+    iframe.setAttribute('frameborder', '0');
+    iframe.allowFullscreen = true;
+    iframe.style.cssText = 'width:100%;height:100%;border:none;pointer-events:none';
+    card.appendChild(iframe);
   } else {
     card.classList.add('is-link');
     const lbl = document.createElement('div');
@@ -460,11 +507,8 @@ function mkCard(gif) {
     lbl.appendChild(icon);
     lbl.appendChild(txt);
     card.appendChild(lbl);
-    card.dataset.type = 'link';
   }
 
-  const ov = document.createElement('div');
-  ov.className = 'overlay';
   attachDelBtn(ov, gif.id, card);
   card.appendChild(ov);
   return card;
@@ -477,7 +521,7 @@ function attachDelBtn(ov, id, card) {
   btn.className = 'del-btn';
   btn.textContent = '✕';
   btn.title = 'Eliminar GIF';
-  btn.addEventListener('click', (e) => { e.stopPropagation(); askConfirm(ov, id, card); });
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); askConfirm(ov, id, card); });
   ov.appendChild(btn);
 }
 
@@ -492,12 +536,12 @@ function askConfirm(ov, id, card) {
   const yes = document.createElement('button');
   yes.className = 'c-yes';
   yes.textContent = '✓';
-  yes.addEventListener('click', () => execDelete(id, card, ov));
+  yes.addEventListener('click', (e) => { e.preventDefault(); execDelete(id, card, ov); });
 
   const no = document.createElement('button');
   no.className = 'c-no';
   no.textContent = '✗';
-  no.addEventListener('click', () => attachDelBtn(ov, id, card));
+  no.addEventListener('click', (e) => { e.preventDefault(); attachDelBtn(ov, id, card); });
 
   row.appendChild(lbl);
   row.appendChild(yes);
@@ -561,8 +605,8 @@ async function loadGifs() {
     const data = await res.json();
     pool = data.gifs;
     setTotal(data.total);
-    cntPreview = pool.filter(g => g.media_url).length;
-    cntLink = pool.filter(g => !g.media_url).length;
+    cntPreview = 0; cntLink = 0;
+    pool.forEach(g => { classifyGif(g).type === 'link' ? cntLink++ : cntPreview++; });
     updateStats();
     grid.innerHTML = '';
     if (pool.length === 0) {
