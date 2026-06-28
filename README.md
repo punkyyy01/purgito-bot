@@ -1,3 +1,5 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![CI](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml/badge.svg)](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white)](https://github.com/Rapptz/discord.py)
+
 <div align="center">
 
 # 🤖 Purgatory Bot
