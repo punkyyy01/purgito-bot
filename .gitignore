@@ -54,4 +54,8 @@ repomix-output.xml
 # Cookies (contienen sesiones, no deben versionarse)
 cookies.txt
 
-repomix-output.xml
+# Backup files
+*.bak
+
+# Node.js artifacts (not a Node project)
+package-lock.json

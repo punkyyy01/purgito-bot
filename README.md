@@ -309,8 +309,9 @@ Una tarea en segundo plano sondea el RSS de cada canal suscrito cada **15 minuto
 │   ├── markov_engine.py    # Motor de cadenas de Markov
 │   ├── meme_generator.py   # Renderizado de memes con Pillow
 │   ├── music_commands.py   # Comandos de música (slash commands)
-│   ├── music_player.py     # Player de audio: cola, loop, yt-dlp
-│   └── __init__.py
+│   └── music_player.py     # Player de audio: cola, loop, yt-dlp
+├── assets/
+│   └── Impact.ttf          # Fuente para renderizado de memes
 ├── data/
 │   └── bot.db              # Base de datos SQLite (generada al arrancar)
 ├── requirements.txt
@@ -343,3 +344,9 @@ Al generar el enlace de invitación en el **Developer Portal**:
 > Si los slash commands no aparecen después de reiniciar, verificá que el bot esté invitado con el scope `applications.commands`.
 
 > Sin `GROQ_API_KEY`, los captions de memes se generan solo con Markov. Con la key configurada, Groq tiene prioridad y Markov es el fallback.
+
+> El bot registra logs en `data/bot.log` con rotación automática (5 MB, 3 backups).
+
+> Al unirse a un servidor nuevo, el bot envía un embed de bienvenida con instrucciones de setup en el primer canal de texto disponible.
+
+> Los memes automáticos se verifican cada **10 minutos**; el intervalo configurado con `/meme_auto activar` define cada cuántas horas se postea.

@@ -8,7 +8,7 @@ Solo la rama `main` recibe parches de seguridad.
 
 **No abras un issue público** si encontraste una vulnerabilidad de seguridad.
 
-Reportala directamente abriendo una [Security Advisory privada](https://github.com/punkyyy01/bot-discord-purg/security/advisories/new) en GitHub, o contactando por Discord al administrador del servidor PURG4TORY ([@punkyyy01](https://github.com/punkyyy01)).
+Reportala directamente abriendo una [Security Advisory privada](https://github.com/punkyyy01/bot-discord-purg/security/advisories/new) en GitHub, o contactando al administrador del proyecto ([@punkyyy01](https://github.com/punkyyy01)) por GitHub.
 
 Incluí:
 

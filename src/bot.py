@@ -81,11 +81,15 @@ GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 BOT_TRIGGER_NAME = os.getenv("BOT_TRIGGER_NAME", "artemis").strip().lower()
 HOME_GUILD_ID: int | None = int(os.getenv("HOME_GUILD_ID", "0")) or None
+# ID fijo del servidor original PURG4TORY. Features restringidas al "home guild"
+# (memes, galería, frases especiales) siempre están activas en este servidor,
+# independientemente de HOME_GUILD_ID. Para otros servers, se usa HOME_GUILD_ID.
 PURGATORY_GUILD_ID = 1434103563214393347
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 
 
 def is_home_guild(guild_id: int | None) -> bool:
+    """Devuelve True si el guild es el servidor home (PURG4TORY o HOME_GUILD_ID)."""
     if guild_id == PURGATORY_GUILD_ID:
         return True
     if HOME_GUILD_ID is None:

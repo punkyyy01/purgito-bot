@@ -276,6 +276,8 @@ nano .env
 sudo nano /etc/systemd/system/bot-purg.service
 ```
 
+> ⚠️ **Seguridad**: creá un usuario dedicado con `sudo useradd -r -s /bin/false bot-purg` y dale permisos sobre `/opt/bot-discord-purg`.
+
 ```ini
 [Unit]
 Description=Bot Discord PURG4TORY
@@ -283,7 +285,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=bot-purg
 WorkingDirectory=/opt/bot-discord-purg
 ExecStart=/opt/bot-discord-purg/.venv/bin/python src/bot.py
 Restart=always
