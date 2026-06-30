@@ -1,7 +1,6 @@
 discord.py
 python-dotenv
 aiosqlite
-markovify
 boto3
 aiohttp
 requests

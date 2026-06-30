@@ -5,6 +5,17 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Sistema de servidores premium: tabla `premium_guilds`, comandos `/premium add|quitar|lista` (solo bot owner, funcionan por DM). Las features restringidas (memos, pool de imágenes, frases especiales, reacciones) siguen siempre activas en PURGATORY_GUILD_ID hardcodeado; para otros servidores se controla desde la tabla. `HOME_GUILD_ID` se migra automáticamente a la tabla en el primer arranque.
+- Limpieza diferida de datos al salir de un servidor: `on_guild_remove` registra la salida en `guild_departures`; task diaria purga datos (DB + R2) después de `GUILD_DATA_RETENTION_DAYS` (default 30). Reinvitar al bot dentro del período cancela el borrado.
+- Límites de almacenamiento por servidor: `MAX_CORPUS_MESSAGES_PER_GUILD` (50k), `MAX_USER_CORPUS_MESSAGES_PER_GUILD` (20k total del guild), `MAX_GIFS_PER_GUILD` (300), `MAX_IMAGES_PER_GUILD` (200) — eviction del registro más viejo al insertar uno nuevo, con limpieza de R2 cuando aplica.
+- Límite de tamaño de GIF antes de subir a R2: `MAX_GIF_DOWNLOAD_BYTES` (8MB default); GIFs más grandes se descartan silenciosamente sin guardar la URL en la DB.
+- Mensaje de bienvenida en `on_guild_join` adaptado: servidores no-premium no ven referencias a `/momo`, 🎯 ni memes. `/help` marca con ⭐ las funciones premium.
+
+### Changed
+- `is_home_guild()` renombrado a `is_premium_guild()` y ahora consulta un `set` en memoria cargado al arrancar (sin hit a DB por evento/comando).
+- `HOME_GUILD_ID` marcada como deprecada en `.env.example` — se sigue leyendo una vez para migrar, luego no tiene efecto en runtime.
+
 ## [1.1.0] — 2026-06-28
 
 ### Added

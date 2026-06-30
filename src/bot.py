@@ -2,18 +2,20 @@ import io
 import os
 import sys
 import re
+import time
 import regex
 import random
 import asyncio
 import hashlib
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 import boto3
 import feedparser
 from collections import OrderedDict
 from logging.handlers import RotatingFileHandler
 from botocore.config import Config
+from groq import AsyncGroq
 from markov_engine import SimpleMarkov
 from meme_generator import render_meme, render_caption, _try_short_sentence
 from gif_gallery import GIF_GALLERY_HTML
@@ -62,6 +64,7 @@ from db import (
     count_image_urls,
     get_random_image_url_excluding,
     delete_image_url,
+    list_image_urls,
     add_frase_especial,
     get_random_frase_especial,
     list_frases_especiales,
@@ -71,6 +74,15 @@ from db import (
     remove_reaction_from_pool,
     list_reaction_pool,
     get_random_reaction,
+    add_premium_guild,
+    remove_premium_guild,
+    list_premium_guilds,
+    mark_guild_departed,
+    clear_guild_departure,
+    get_expired_departures,
+    purge_guild_data,
+    trim_corpus_if_needed,
+    trim_user_corpus_if_needed,
 )
 
 # Cargar variables de entorno
@@ -80,21 +92,22 @@ ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().low
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 BOT_TRIGGER_NAME = os.getenv("BOT_TRIGGER_NAME", "artemis").strip().lower()
-HOME_GUILD_ID: int | None = int(os.getenv("HOME_GUILD_ID", "0")) or None
-# ID fijo del servidor original PURG4TORY. Features restringidas al "home guild"
-# (memes, galería, frases especiales) siempre están activas en este servidor,
-# independientemente de HOME_GUILD_ID. Para otros servers, se usa HOME_GUILD_ID.
+BOT_OWNER_ID: int | None = int(os.getenv("BOT_OWNER_ID", "0")) or None
+# ID fijo del servidor original PURG4TORY — siempre premium, sin pasar por la tabla.
 PURGATORY_GUILD_ID = 1434103563214393347
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 
+# Set populated from premium_guilds table in on_ready; checked on every premium feature call.
+_premium_guild_ids: set[int] = set()
 
-def is_home_guild(guild_id: int | None) -> bool:
-    """Devuelve True si el guild es el servidor home (PURG4TORY o HOME_GUILD_ID)."""
+
+def is_premium_guild(guild_id: int | None) -> bool:
+    """Returns True if the guild has access to premium features (memes, image pool, etc.)."""
     if guild_id == PURGATORY_GUILD_ID:
         return True
-    if HOME_GUILD_ID is None:
+    if guild_id is None:
         return False
-    return guild_id == HOME_GUILD_ID
+    return guild_id in _premium_guild_ids
 
 
 def _env_int(name: str, default: int) -> int:
@@ -201,7 +214,6 @@ else:
 def _r2_available() -> bool:
     return _r2_client is not None
 
-from groq import AsyncGroq
 _groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def has_admin_permission(interaction: discord.Interaction) -> bool:
@@ -216,6 +228,7 @@ def _note_corpus_insert(guild_id: int, channel_id: int) -> None:
     if n >= 50:
         _corpus_insert_counter[key] = 0
         _markov_cache.pop(guild_id, None)
+        asyncio.create_task(trim_corpus_if_needed(guild_id))
     else:
         _corpus_insert_counter[key] = n
 
@@ -226,6 +239,7 @@ def _note_user_corpus_insert(guild_id: int, author_id: int) -> None:
     if n >= 50:
         _user_corpus_insert_counter[key] = 0
         _user_markov_cache.pop(key, None)
+        asyncio.create_task(trim_user_corpus_if_needed(guild_id))
     else:
         _user_corpus_insert_counter[key] = n
 
@@ -410,8 +424,7 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
 async def generate_response(guild_id: int) -> tuple[str | None, bool]:
     """Decide entre frase especial o Markov. Retorna (texto, es_especial).
     es_especial=True indica que el texto no debe pasar por post_process_reply."""
-    import time as _time
-    now = _time.monotonic()
+    now = time.monotonic()
     cooldown_ok = now - _special_phrase_cooldowns.get(guild_id, 0.0) >= _SPECIAL_PHRASE_COOLDOWN
     if cooldown_ok and random.random() < SPECIAL_PHRASE_PROBABILITY:
         phrase = await get_random_frase_especial(guild_id)
@@ -421,16 +434,30 @@ async def generate_response(guild_id: int) -> tuple[str | None, bool]:
     return await generate_markov_reply(guild_id), False
 
 
+_GIF_TOO_LARGE = ""  # ponytail: empty-string sentinel returned when gif exceeds MAX_GIF_DOWNLOAD_BYTES
+
+
 def upload_gif_to_r2_sync(url: str, guild_id: int) -> str | None:
+    """Returns R2 URL on success, '' if gif exceeds size limit (skip DB save), None on other errors."""
     if not _r2_available():
         return None
+    max_bytes = _env_int("MAX_GIF_DOWNLOAD_BYTES", 8 * 1024 * 1024)
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15, stream=True)
         if resp.status_code != 200:
             log.error("HTTP %s al descargar GIF para R2: %s", resp.status_code, url)
             return None
+        cl = resp.headers.get("Content-Length")
+        if cl and int(cl) > max_bytes:
+            log.debug("GIF descartado (Content-Length %s > %d): %s", cl, max_bytes, url)
+            resp.close()
+            return _GIF_TOO_LARGE
         data = resp.content
+        resp.close()
+        if len(data) > max_bytes:
+            log.debug("GIF descartado (%d bytes > %d): %s", len(data), max_bytes, url)
+            return _GIF_TOO_LARGE
         key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}.gif"
         _r2_client.put_object(
             Bucket=_R2_BUCKET,
@@ -481,7 +508,7 @@ _MEME_MAX_BYTES = 10 * 1024 * 1024
 
 
 async def handle_meme_command(message: discord.Message) -> None:
-    if not is_home_guild(message.guild.id if message.guild else None):
+    if not is_premium_guild(message.guild.id if message.guild else None):
         return
 
     log.info(
@@ -586,8 +613,6 @@ async def resolve_media_url(url: str) -> str | None:
 async def resolve_gifs_task():
     gifs = await get_unresolved_gifs(PURGATORY_GUILD_ID, limit=25)
     if not gifs:
-        log.info("Todos los GIFs resueltos")
-        resolve_gifs_task.stop()
         return
     for gif in gifs:
         resolved = await resolve_media_url(gif["url"])
@@ -596,11 +621,43 @@ async def resolve_gifs_task():
         await asyncio.sleep(1.5)
 
 
+@tasks.loop(hours=24)
+async def guild_cleanup_task():
+    retention = _env_int("GUILD_DATA_RETENTION_DAYS", 30)
+    expired = await get_expired_departures(retention)
+    if not expired:
+        return
+    purged = 0
+    for guild_id in expired:
+        try:
+            if _r2_available() and _R2_PUBLIC_URL:
+                for item in await list_gif_urls(guild_id):
+                    if item["url"].startswith(_R2_PUBLIC_URL):
+                        key = item["url"][len(_R2_PUBLIC_URL.rstrip("/")) + 1:]
+                        try:
+                            await asyncio.to_thread(_r2_client.delete_object, Bucket=_R2_BUCKET, Key=key)
+                        except Exception:
+                            log.warning("guild_cleanup: error borrando GIF R2 %s", item["url"])
+                for img_url in await list_image_urls(guild_id):
+                    if img_url.startswith(_R2_PUBLIC_URL):
+                        key = img_url[len(_R2_PUBLIC_URL.rstrip("/")) + 1:]
+                        try:
+                            await asyncio.to_thread(_r2_client.delete_object, Bucket=_R2_BUCKET, Key=key)
+                        except Exception:
+                            log.warning("guild_cleanup: error borrando imagen R2 %s", img_url)
+            await purge_guild_data(guild_id)
+            _premium_guild_ids.discard(guild_id)
+            purged += 1
+        except Exception:
+            log.exception("guild_cleanup: error purgando guild %s", guild_id)
+    if purged:
+        log.info("guild_cleanup: %d servidor(es) purgados", purged)
+
+
 # --- WEB API ---
 
 def _rate_ok(store: dict[str, list[float]], ip: str, limit: int, window: float = 60.0) -> bool:
-    import time as _t
-    now = _t.monotonic()
+    now = time.monotonic()
     ts = [t for t in store.get(ip, []) if now - t < window]
     if len(ts) >= limit:
         store[ip] = ts
@@ -757,8 +814,7 @@ async def generate_groq_meme_caption(
     if not _groq_client:
         return None
 
-    import time as _time
-    now = _time.monotonic()
+    now = time.monotonic()
     if guild_id and now - _groq_cooldowns.get(guild_id, 0.0) < _GROQ_GUILD_COOLDOWN:
         log.debug("Groq cooldown activo para guild %s, fallback a Markov", guild_id)
         return None
@@ -842,7 +898,7 @@ async def auto_meme_task():
 
             # Obtener imagen válida del pool (con eviction lazy de URLs expiradas)
             guild_id = schedule["guild_id"]
-            if not is_home_guild(guild_id):
+            if not is_premium_guild(guild_id):
                 continue
             img_bytes = None
             image_url = None
@@ -916,13 +972,18 @@ async def auto_meme_task():
 
 @bot.event
 async def on_ready():
+    global _premium_guild_ids
     await init_db()
+    _premium_guild_ids = {g["guild_id"] for g in await list_premium_guilds()}
+    log.info("Servidores premium cargados: %s", _premium_guild_ids)
     if not check_youtube.is_running():
         check_youtube.start()
     if not auto_meme_task.is_running():
         auto_meme_task.start()
     if not resolve_gifs_task.is_running():
         resolve_gifs_task.start()
+    if not guild_cleanup_task.is_running():
+        guild_cleanup_task.start()
     try:
         await start_web_server()
     except Exception:
@@ -1008,6 +1069,8 @@ async def on_message(message: discord.Message):
                     url = m.group(0)
                     if "cdn.discordapp.com" in url:
                         r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, message.guild.id)
+                        if r2_url == _GIF_TOO_LARGE:
+                            continue
                         if r2_url:
                             url = r2_url
                     await save_gif_url(message.guild.id, url)
@@ -1023,6 +1086,8 @@ async def on_message(message: discord.Message):
                     url = attachment.url
                     if "cdn.discordapp.com" in url:
                         r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, message.guild.id)
+                        if r2_url == _GIF_TOO_LARGE:
+                            continue
                         if r2_url:
                             url = r2_url
                     await save_gif_url(message.guild.id, url)
@@ -1114,7 +1179,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
     if payload.guild_id is None:
         return
-    if not is_home_guild(payload.guild_id):
+    if not is_premium_guild(payload.guild_id):
         return
     channel = bot.get_channel(payload.channel_id)
     if not isinstance(channel, discord.TextChannel):
@@ -1206,6 +1271,8 @@ async def refeed_slash(interaction: discord.Interaction):
                         url = m.group(0)
                         if "cdn.discordapp.com" in url:
                             r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+                            if r2_url == _GIF_TOO_LARGE:
+                                continue
                             if r2_url:
                                 url = r2_url
                         await save_gif_url(interaction.guild.id, url)
@@ -1221,6 +1288,8 @@ async def refeed_slash(interaction: discord.Interaction):
                         url = attachment.url
                         if "cdn.discordapp.com" in url:
                             r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+                            if r2_url == _GIF_TOO_LARGE:
+                                continue
                             if r2_url:
                                 url = r2_url
                         await save_gif_url(interaction.guild.id, url)
@@ -1304,6 +1373,8 @@ async def refeed_all_slash(interaction: discord.Interaction):
                             url = m.group(0)
                             if "cdn.discordapp.com" in url:
                                 r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+                                if r2_url == _GIF_TOO_LARGE:
+                                    continue
                                 if r2_url:
                                     url = r2_url
                             await save_gif_url(interaction.guild.id, url)
@@ -1319,6 +1390,8 @@ async def refeed_all_slash(interaction: discord.Interaction):
                             url = attachment.url
                             if "cdn.discordapp.com" in url:
                                 r2_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+                                if r2_url == _GIF_TOO_LARGE:
+                                    continue
                                 if r2_url:
                                     url = r2_url
                             await save_gif_url(interaction.guild.id, url)
@@ -1425,6 +1498,8 @@ async def corpus_wipe_slash(interaction: discord.Interaction):
         _message_counter.pop(key, None)
     for key in [k for k in _user_corpus_insert_counter.keys() if k[0] == gid]:
         _user_corpus_insert_counter.pop(key, None)
+    for key in [k for k in _user_markov_cache.keys() if k[0] == gid]:
+        _user_markov_cache.pop(key, None)
 
     await interaction.followup.send("🗑️ Corpus limpiado. Corre /refeed_all para repoblarlo.")
 
@@ -1455,7 +1530,7 @@ async def gif_add_slash(interaction: discord.Interaction, url: str):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
 
@@ -1464,6 +1539,9 @@ async def gif_add_slash(interaction: discord.Interaction, url: str):
     url = url.strip()
     if "cdn.discordapp.com" in url:
         final_url = await asyncio.to_thread(upload_gif_to_r2_sync, url, interaction.guild.id)
+        if final_url == _GIF_TOO_LARGE:
+            await interaction.followup.send("❌ El GIF supera el límite de tamaño permitido.")
+            return
         if not final_url:
             await interaction.followup.send("❌ No se pudo subir el GIF a R2. Comprueba que la URL sea accesible.")
             return
@@ -1709,7 +1787,7 @@ async def meme_auto_activar(interaction: discord.Interaction, canal: discord.Tex
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     if intervalo < 2:
@@ -1734,7 +1812,7 @@ async def meme_auto_desactivar(interaction: discord.Interaction, canal: discord.
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     removed = await remove_meme_schedule(interaction.guild.id, canal.id)
@@ -1758,7 +1836,7 @@ async def meme_auto_lista(interaction: discord.Interaction):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     schedules = await list_meme_schedules(interaction.guild.id)
@@ -1766,7 +1844,7 @@ async def meme_auto_lista(interaction: discord.Interaction):
         await interaction.response.send_message("ℹ️ no hay canales configurados", ephemeral=True)
         return
     lines = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for s in schedules:
         horas = s["interval_minutes"] // 60
         if s["last_posted_at"] is not None:
@@ -1790,10 +1868,9 @@ bot.tree.add_command(_meme_auto)
 
 @bot.tree.command(name="momo", description="Genera un meme del server.")
 async def momo_slash(interaction: discord.Interaction):
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
-    import time
     now = time.time()
     cooldown_key = (interaction.guild_id or 0, interaction.user.id)
     last = _momo_cooldowns.get(cooldown_key, 0)
@@ -1871,7 +1948,7 @@ async def momo_slash(interaction: discord.Interaction):
 
 @bot.tree.command(name="meme", description="Genera un meme del server.")
 async def meme_slash(interaction: discord.Interaction):
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     await momo_slash.callback(interaction)
@@ -1883,7 +1960,7 @@ async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     texto = frase.strip()
@@ -1899,7 +1976,7 @@ async def ver_frases_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
@@ -1923,7 +2000,7 @@ async def borrar_frase_slash(interaction: discord.Interaction, id: int):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     frase = await get_frase_especial(interaction.guild.id, id)
@@ -1956,7 +2033,7 @@ async def reacciones_add(interaction: discord.Interaction, emoji: str):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     text = emoji.strip()
@@ -1979,7 +2056,7 @@ async def reacciones_quitar(interaction: discord.Interaction, id: int):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     removed = await remove_reaction_from_pool(interaction.guild.id, id)
@@ -1997,7 +2074,7 @@ async def reacciones_lista(interaction: discord.Interaction):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_home_guild(interaction.guild_id):
+    if not is_premium_guild(interaction.guild_id):
         await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     pool = await list_reaction_pool(interaction.guild.id)
@@ -2014,24 +2091,110 @@ async def reacciones_lista(interaction: discord.Interaction):
 bot.tree.add_command(_reacciones)
 
 
+_premium_group = app_commands.Group(
+    name="premium",
+    description="Gestiona servidores premium (solo bot owner)",
+    guild_only=False,
+)
+
+
+def _is_owner(interaction: discord.Interaction) -> bool:
+    return bool(BOT_OWNER_ID and interaction.user.id == BOT_OWNER_ID)
+
+
+@_premium_group.command(name="add", description="Agrega un servidor al plan premium.")
+@app_commands.describe(guild_id="ID del servidor", nota="Nota opcional")
+async def premium_add(interaction: discord.Interaction, guild_id: str, nota: str | None = None):
+    if not _is_owner(interaction):
+        await interaction.response.send_message("no tenés permiso", ephemeral=True)
+        return
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
+        return
+    added = await add_premium_guild(gid, nota)
+    if added:
+        _premium_guild_ids.add(gid)
+        guild_obj = bot.get_guild(gid)
+        name = guild_obj.name if guild_obj else str(gid)
+        await interaction.response.send_message(f"✅ `{name}` ({gid}) agregado como premium.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ El servidor `{gid}` ya era premium.", ephemeral=True)
+
+
+@_premium_group.command(name="quitar", description="Quita un servidor del plan premium.")
+@app_commands.describe(guild_id="ID del servidor")
+async def premium_quitar(interaction: discord.Interaction, guild_id: str):
+    if not _is_owner(interaction):
+        await interaction.response.send_message("no tenés permiso", ephemeral=True)
+        return
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
+        return
+    removed = await remove_premium_guild(gid)
+    if removed:
+        _premium_guild_ids.discard(gid)
+        await interaction.response.send_message(f"✅ Servidor `{gid}` quitado del plan premium.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ El servidor `{gid}` no estaba en premium.", ephemeral=True)
+
+
+@_premium_group.command(name="lista", description="Lista los servidores premium.")
+async def premium_lista(interaction: discord.Interaction):
+    if not _is_owner(interaction):
+        await interaction.response.send_message("no tenés permiso", ephemeral=True)
+        return
+    guilds_list = await list_premium_guilds()
+    if not guilds_list:
+        await interaction.response.send_message("ℹ️ No hay servidores premium registrados.", ephemeral=True)
+        return
+    lines = []
+    for g in guilds_list:
+        guild_obj = bot.get_guild(g["guild_id"])
+        name = guild_obj.name if guild_obj else "—"
+        note = f" — {g['note']}" if g["note"] else ""
+        lines.append(f"• `{g['guild_id']}` {name} (desde {g['added_at'][:10]}){note}")
+    body = "**Servidores premium:**\n" + "\n".join(lines)
+    if len(body) > 1900:
+        body = body[:1900] + "\n…"
+    await interaction.response.send_message(body, ephemeral=True)
+
+
+bot.tree.add_command(_premium_group)
+
+
 @bot.event
 async def on_guild_join(guild: discord.Guild):
+    await clear_guild_departure(guild.id)
     trigger = BOT_TRIGGER_NAME
+    is_prem = is_premium_guild(guild.id)
     welcome = (
         f"¡Hola! Soy un bot de Markov que aprende a hablar como tu servidor.\n\n"
         f"**Para empezar:**\n"
         f"• Corre `/refeed_all` para importar el historial de mensajes al corpus (necesita permiso *Gestionar servidor*)\n"
-        f"• Reacciona a imágenes con 🎯 para agregarlas al pool de `/momo`\n\n"
-        f"**Comandos principales:**\n"
+    )
+    if is_prem:
+        welcome += "• Reacciona a imágenes con 🎯 para agregarlas al pool de `/momo`\n"
+    welcome += (
+        f"\n**Comandos principales:**\n"
         f"🤖 `/generar` — genera un mensaje con Markov\n"
         f"🎭 `/imitar @usuario` — imita el estilo de un miembro\n"
-        f"😂 `/momo` — genera un meme del server\n"
+    )
+    if is_prem:
+        welcome += f"😂 `/momo` — genera un meme del server\n"
+    welcome += (
         f"🎵 `/play <canción>` — reproduce música\n"
         f"💬 `/chatmode` — activa/desactiva respuestas al mencionarme\n"
         f"📺 `/youtube_add` — notificaciones de YouTube\n"
-        f"⚙️ `/help` — lista completa de comandos\n\n"
-        f"También respondo a `{trigger} generar` (reply a imagen) para generar un meme rápido."
+        f"⚙️ `/help` — lista completa de comandos\n"
     )
+    if is_prem:
+        welcome += f"\nTambién respondo a `{trigger} generar` (reply a imagen) para generar un meme rápido."
+    else:
+        welcome += "\n⭐ *Algunas funciones (memes, reacciones configurables) son solo para servidores premium.*"
     for channel in guild.text_channels:
         perms = channel.permissions_for(guild.me)
         if perms.send_messages:
@@ -2041,6 +2204,14 @@ async def on_guild_join(guild: discord.Guild):
             except Exception:
                 log.warning("on_guild_join: no se pudo enviar mensaje en %s (%s)", channel.id, guild.id)
             break
+
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    if guild.id == PURGATORY_GUILD_ID:
+        return
+    await mark_guild_departed(guild.id)
+    log.info("on_guild_remove: guild %s (%s) marcado para limpieza diferida", guild.id, guild.name)
 
 
 @bot.tree.command(name="help", description="Muestra todos los comandos disponibles del bot.")
@@ -2072,15 +2243,16 @@ async def help_slash(interaction: discord.Interaction):
             "`/imitar @usuario` — imita el estilo de un miembro\n"
             "`/chatmode on|off [#canal]` — activa/desactiva auto-reply\n"
             "`/corpus_info` — mensajes en el corpus del canal\n"
-            "`/añadir_frase <texto>` — agrega una frase especial al pool\n"
-            "`/ver_frases` — lista las frases especiales\n"
-            "`/borrar_frase <id>` — borra una frase especial"
+            "`/añadir_frase <texto>` — agrega una frase especial al pool ⭐\n"
+            "`/ver_frases` — lista las frases especiales ⭐\n"
+            "`/borrar_frase <id>` — borra una frase especial ⭐"
         ),
         inline=False,
     )
     embed.add_field(
-        name="😂 Memes",
+        name="😂 Memes ⭐",
         value=(
+            "⭐ *Funciones premium — no disponibles en todos los servidores*\n"
             "`/momo` / `/meme` — genera un meme del pool de imágenes\n"
             f"`{BOT_TRIGGER_NAME} generar` *(reply a imagen)* — meme de esa imagen\n"
             "`/meme_auto activar #canal <horas>` — memes automáticos\n"
@@ -2106,8 +2278,8 @@ async def help_slash(interaction: discord.Interaction):
             "`/refeed_all` — importa todos los canales\n"
             "`/corpus_wipe` — borra el corpus del servidor\n"
             "`/corpus_ignorar add|quitar|lista` — gestiona canales ignorados\n"
-            "`/gif_add <url>` — agrega un GIF a la colección\n"
-            "`/reacciones add|quitar|lista` — pool de emojis de reacción\n"
+            "`/gif_add <url>` — agrega un GIF a la colección ⭐\n"
+            "`/reacciones add|quitar|lista` — pool de emojis de reacción ⭐\n"
             "`!ping` — verifica que el bot está online"
         ),
         inline=False,

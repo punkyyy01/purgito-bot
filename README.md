@@ -68,8 +68,8 @@ Editá `.env` con tus valores:
 # ── Obligatorio ────────────────────────────────────────────────────
 DISCORD_TOKEN=tu_token_aquí
 
-# ── Servidor home (restringe memes, galería y frases a este guild) ─
-HOME_GUILD_ID=123456789012345678
+# ── Bot owner (para /premium add|quitar|lista) ─────────────────────
+BOT_OWNER_ID=tu_discord_id
 
 # ── Desarrollo (sync instantáneo de slash commands) ────────────────
 GUILD_ID=123456789012345678
@@ -161,7 +161,9 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 |---|---|---|
 | `/gif_add <url>` | Añade un GIF manualmente (Tenor, Giphy o Discord CDN) | Gestionar servidor |
 
-### 😂 Memes
+### 😂 Memes ⭐ (premium)
+
+> Estas funciones solo están disponibles en servidores premium. Usá `/premium add <guild_id>` como bot owner para habilitarlas.
 
 | Comando | Descripción | Permisos |
 |---|---|---|
@@ -170,7 +172,7 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 
 **Trigger rápido (sin slash):** respondé (reply) a un mensaje con imagen y escribí `artemis generar` o `@bot generar`.
 
-### ⏱️ Memes automáticos
+### ⏱️ Memes automáticos ⭐ (premium)
 
 | Comando | Descripción | Permisos |
 |---|---|---|
@@ -178,7 +180,7 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 | `/meme_auto desactivar #canal` | Desactiva memes automáticos | Gestionar servidor |
 | `/meme_auto lista` | Lista configuración actual | Gestionar servidor |
 
-### 💬 Frases especiales
+### 💬 Frases especiales ⭐ (premium)
 
 Pool de frases fijas que el bot puede soltar con un 5% de probabilidad (cooldown de 40 minutos por servidor).
 
