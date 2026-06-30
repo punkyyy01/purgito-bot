@@ -1001,16 +1001,16 @@ async def on_ready():
     try:
         log.info("Iniciando sincronización de comandos")
 
+        # Sync global siempre — necesario para que cualquier servidor nuevo reciba los comandos.
+        synced = await bot.tree.sync()
+        log.info("Sync global: %s", [c.name for c in synced])
+
         if GUILD_ID_ENV:
-            # Sync instantáneo a un servidor específico (desarrollo)
+            # Sync instantáneo adicional a tu servidor de desarrollo (no reemplaza al global).
             guild_obj = discord.Object(id=int(GUILD_ID_ENV))
             bot.tree.copy_global_to(guild=guild_obj)
-            synced = await bot.tree.sync(guild=guild_obj)
-            log.info("Sync al servidor %s: %s", GUILD_ID_ENV, [c.name for c in synced])
-        else:
-            # Sync global (puede tardar hasta 1 hora en propagarse)
-            synced = await bot.tree.sync()
-            log.info("Sync global: %s", [c.name for c in synced])
+            guild_synced = await bot.tree.sync(guild=guild_obj)
+            log.info("Sync instantáneo al servidor %s: %s", GUILD_ID_ENV, [c.name for c in guild_synced])
 
     except Exception:
         log.exception("Error en la sincronización de comandos")
