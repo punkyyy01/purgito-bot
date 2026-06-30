@@ -28,7 +28,6 @@ Cadenas de Markov · Colección de GIFs · Música · Memes · Notificaciones de
 | 💬 | **Modo chat** | Responde cuando lo mencionás o le hacés reply |
 | 🎵 | **Música** | Reproduce audio de YouTube/URLs con cola, loop, shuffle y controles interactivos |
 | 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
-| 🖼️ | **Galería pública** | Interfaz web en [gifs.purg4t0ry.com](https://gifs.purg4t0ry.com) con API REST para la colección |
 | 📺 | **Notificaciones YouTube** | Sondea canales cada 15 min y avisa cuando hay video nuevo |
 | 😂 | **Memes** | Genera memes con `/momo` o con reply a imagen; captions con Groq (llama-4-scout) o Markov |
 | ⏱️ | **Memes automáticos** | Postea memes en canales configurables cada 2–24 horas |
