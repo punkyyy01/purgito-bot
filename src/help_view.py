@@ -19,10 +19,10 @@ INTRO_DESCRIPTION = (
     "usando cadenas de Markov entrenadas con los propios mensajes del server, "
     "reproduce música, guarda los GIFs que se comparten en una galería pública "
     "y avisa cuando tus creadores de YouTube favoritos suben contenido nuevo.\n\n"
-    "Todos los comandos son **slash commands** (`/`) — escribí `/` en el chat y "
+    "Todos los comandos son **slash commands** (`/`) — escribe `/` en el chat y "
     "Discord te va a mostrar las opciones con autocompletado. La única excepción "
     "es `!ping`, que es un comando de texto clásico.\n\n"
-    "Usá los botones de abajo para ver los comandos de cada sección."
+    "Usa los botones de abajo para ver los comandos de cada sección."
 )
 
 CATEGORIES = {
@@ -109,7 +109,7 @@ def build_intro_embed(guild_name: str) -> discord.Embed:
         description=INTRO_DESCRIPTION,
         color=PURGITO_COLOR,
     )
-    embed.set_footer(text=f"Comandos disponibles en {guild_name} · usá los botones de abajo")
+    embed.set_footer(text=f"Comandos disponibles en {guild_name} · usa los botones de abajo")
     return embed
 
 
@@ -164,7 +164,7 @@ class HelpView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "Este menú lo abrió otra persona — usá `/help` para abrir el tuyo.",
+                "Este menú lo abrió otra persona — usa `/help` para abrir el tuyo.",
                 ephemeral=True,
             )
             return False
