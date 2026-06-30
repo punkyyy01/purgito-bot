@@ -1960,9 +1960,6 @@ async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
         return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-        return
     texto = frase.strip()
     if not texto:
         await interaction.response.send_message("❌ La frase no puede estar vacía.", ephemeral=True)
@@ -1975,9 +1972,6 @@ async def añadir_frase_slash(interaction: discord.Interaction, frase: str):
 async def ver_frases_slash(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
-        return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     frases = await list_frases_especiales(interaction.guild.id)
@@ -1999,9 +1993,6 @@ async def ver_frases_slash(interaction: discord.Interaction):
 async def borrar_frase_slash(interaction: discord.Interaction, id: int):
     if not interaction.guild:
         await interaction.response.send_message("Solo en servidores.", ephemeral=True)
-        return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     frase = await get_frase_especial(interaction.guild.id, id)
     if frase is None:
@@ -2033,9 +2024,6 @@ async def reacciones_add(interaction: discord.Interaction, emoji: str):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-        return
     text = emoji.strip()
     if not text:
         await interaction.response.send_message("❌ El emoji no puede estar vacío.", ephemeral=True)
@@ -2056,9 +2044,6 @@ async def reacciones_quitar(interaction: discord.Interaction, id: int):
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
         return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-        return
     removed = await remove_reaction_from_pool(interaction.guild.id, id)
     if removed:
         await interaction.response.send_message(f"✅ Emoji con ID `{id}` eliminado del pool.", ephemeral=True)
@@ -2073,9 +2058,6 @@ async def reacciones_lista(interaction: discord.Interaction):
         return
     if not has_admin_permission(interaction):
         await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
-        return
-    if not is_premium_guild(interaction.guild_id):
-        await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
         return
     pool = await list_reaction_pool(interaction.guild.id)
     if not pool:
@@ -2194,7 +2176,7 @@ async def on_guild_join(guild: discord.Guild):
     if is_prem:
         welcome += f"\nTambién respondo a `{trigger} generar` (reply a imagen) para generar un meme rápido."
     else:
-        welcome += "\n⭐ *Algunas funciones (memes, reacciones configurables) son solo para servidores premium.*"
+        welcome += "\n⭐ *Algunas funciones (memes y pool de imágenes) son solo para servidores premium.*"
     for channel in guild.text_channels:
         perms = channel.permissions_for(guild.me)
         if perms.send_messages:
@@ -2243,9 +2225,9 @@ async def help_slash(interaction: discord.Interaction):
             "`/imitar @usuario` — imita el estilo de un miembro\n"
             "`/chatmode on|off [#canal]` — activa/desactiva auto-reply\n"
             "`/corpus_info` — mensajes en el corpus del canal\n"
-            "`/añadir_frase <texto>` — agrega una frase especial al pool ⭐\n"
-            "`/ver_frases` — lista las frases especiales ⭐\n"
-            "`/borrar_frase <id>` — borra una frase especial ⭐"
+            "`/añadir_frase <texto>` — agrega una frase especial al pool\n"
+            "`/ver_frases` — lista las frases especiales\n"
+            "`/borrar_frase <id>` — borra una frase especial"
         ),
         inline=False,
     )
@@ -2279,7 +2261,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/corpus_wipe` — borra el corpus del servidor\n"
             "`/corpus_ignorar add|quitar|lista` — gestiona canales ignorados\n"
             "`/gif_add <url>` — agrega un GIF a la colección ⭐\n"
-            "`/reacciones add|quitar|lista` — pool de emojis de reacción ⭐\n"
+            "`/reacciones add|quitar|lista` — pool de emojis de reacción\n"
             "`!ping` — verifica que el bot está online"
         ),
         inline=False,

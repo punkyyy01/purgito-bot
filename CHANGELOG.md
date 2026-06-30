@@ -15,6 +15,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 ### Changed
 - `is_home_guild()` renombrado a `is_premium_guild()` y ahora consulta un `set` en memoria cargado al arrancar (sin hit a DB por evento/comando).
 - `HOME_GUILD_ID` marcada como deprecada en `.env.example` — se sigue leyendo una vez para migrar, luego no tiene efecto en runtime.
+- Frases especiales (`/añadir_frase`, `/ver_frases`, `/borrar_frase`) y pool de reacciones (`/reacciones add|quitar|lista`) liberados del gate premium; ahora disponibles en todos los servidores.
 
 ## [1.1.0] — 2026-06-28
 
