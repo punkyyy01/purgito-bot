@@ -2196,81 +2196,11 @@ async def on_guild_remove(guild: discord.Guild):
     log.info("on_guild_remove: guild %s (%s) marcado para limpieza diferida", guild.id, guild.name)
 
 
-@bot.tree.command(name="help", description="Muestra todos los comandos disponibles del bot.")
-async def help_slash(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="Comandos del bot",
-        color=0x8B00FF,
-    )
-    embed.add_field(
-        name="🎵 Música",
-        value=(
-            "`/play <query>` — reproduce o encola una canción\n"
-            "`/skip` — salta la canción actual\n"
-            "`/stop` — detiene y vacía la cola\n"
-            "`/pause` / `/resume` — pausa o reanuda\n"
-            "`/nowplaying` — muestra la canción actual\n"
-            "`/queue` — muestra la cola\n"
-            "`/volume <1-100>` — ajusta el volumen\n"
-            "`/loop` — alterna loop: off / canción / cola\n"
-            "`/shuffle` — mezcla la cola\n"
-            "`/leave` — sale del canal de voz"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🤖 Markov / Chat",
-        value=(
-            "`/generar` — genera un mensaje con Markov\n"
-            "`/imitar @usuario` — imita el estilo de un miembro\n"
-            "`/chatmode on|off [#canal]` — activa/desactiva auto-reply\n"
-            "`/corpus_info` — mensajes en el corpus del canal\n"
-            "`/añadir_frase <texto>` — agrega una frase especial al pool\n"
-            "`/ver_frases` — lista las frases especiales\n"
-            "`/borrar_frase <id>` — borra una frase especial"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="😂 Memes ⭐",
-        value=(
-            "⭐ *Funciones premium — no disponibles en todos los servidores*\n"
-            "`/momo` / `/meme` — genera un meme del pool de imágenes\n"
-            f"`{BOT_TRIGGER_NAME} generar` *(reply a imagen)* — meme de esa imagen\n"
-            "`/meme_auto activar #canal <horas>` — memes automáticos\n"
-            "`/meme_auto desactivar #canal` — desactiva memes automáticos\n"
-            "`/meme_auto lista` — canales con memes automáticos"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📺 YouTube",
-        value=(
-            "`/youtube_add <id> #canal [rol]` — suscribe un canal de YouTube\n"
-            "`/youtube_remove <id>` — elimina una suscripción\n"
-            "`/youtube_list` — lista suscripciones activas\n"
-            "`/youtube_set_mention <id> [rol]` — configura mención"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="⚙️ Administración",
-        value=(
-            "`/refeed` — importa mensajes del canal al corpus\n"
-            "`/refeed_all` — importa todos los canales\n"
-            "`/corpus_wipe` — borra el corpus del servidor\n"
-            "`/corpus_ignorar add|quitar|lista` — gestiona canales ignorados\n"
-            "`/gif_add <url>` — agrega un GIF a la colección ⭐\n"
-            "`/reacciones add|quitar|lista` — pool de emojis de reacción\n"
-            "`!ping` — verifica que el bot está online"
-        ),
-        inline=False,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
 from music_commands import register_music_commands
 register_music_commands(bot)
+
+from help_view import register_help_command
+register_help_command(bot)
 
 if __name__ == "__main__":
     try:
