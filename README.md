@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# 🤖 Purgatory Bot
+# 🤖 Purgito Bot
 
 **Bot de Discord que aprende a hablar como tu servidor.**
 
