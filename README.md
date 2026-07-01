@@ -179,7 +179,7 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 | `/meme_auto desactivar #canal` | Desactiva memes automáticos | Gestionar servidor |
 | `/meme_auto lista` | Lista configuración actual | Gestionar servidor |
 
-### 💬 Frases especiales ⭐ (premium)
+### 💬 Frases especiales
 
 Pool de frases fijas que el bot puede soltar con un 5% de probabilidad (cooldown de 40 minutos por servidor).
 
