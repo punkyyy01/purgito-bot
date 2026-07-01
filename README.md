@@ -6,7 +6,7 @@
 
 **Bot de Discord que aprende a hablar como tu servidor.**
 
-Cadenas de Markov · Colección de GIFs · Música · Memes · Notificaciones de YouTube
+Cadenas de Markov · Colección de GIFs · Música · Configuración guiada · Notificaciones de YouTube
 
 ---
 
@@ -23,11 +23,12 @@ Cadenas de Markov · Colección de GIFs · Música · Memes · Notificaciones de
 
 | | Característica | Descripción |
 |---|---|---|
-| 🧠 | **Markov automático** | Aprende del chat y genera réplicas al estilo del servidor cada 15 mensajes |
+| 🧠 | **Markov automático** | Aprende del chat y genera réplicas al estilo del servidor cada 15 mensajes nuevos, con probabilidad configurable |
 | 🎭 | **Imitación de usuarios** | Imita el estilo de escritura de cualquier miembro con `/imitar` |
 | 💬 | **Modo chat** | Responde cuando lo mencionás o le hacés reply |
 | 🎵 | **Música** | Reproduce audio de YouTube/URLs con cola, loop, shuffle y controles interactivos |
 | 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
+| ⚙️ | **Configuración del servidor** | Panel `/settings`, onboarding `/setup` y mensaje de bienvenida con acceso rápido |
 | 📺 | **Notificaciones YouTube** | Sondea canales cada 15 min y avisa cuando hay video nuevo |
 | 😂 | **Memes** | Genera memes con `/momo` o con reply a imagen; captions con Groq (llama-4-scout) o Markov |
 | ⏱️ | **Memes automáticos** | Postea memes en canales configurables cada 2–24 horas |
@@ -90,6 +91,12 @@ REFEED_ALL_MAX_MESSAGES=20000
 MARKOV_TRAINING_MESSAGES=5000
 USER_MARKOV_TRAINING_MESSAGES=2000
 
+# ── Auto-generación de respuestas ─────────────────────────────────
+AUTO_GENERATE_PROBABILITY=0.6
+
+# ── Retención de datos al salir de un servidor ────────────────────
+GUILD_DATA_RETENTION_DAYS=30
+
 # ── Cloudflare R2 (para persistir GIFs de Discord CDN) ────────────
 R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 R2_ACCESS_KEY_ID=tu_key
@@ -99,6 +106,9 @@ R2_PUBLIC_URL=https://pub-xxx.r2.dev
 
 # ── Groq (captions de memes con visión, opcional) ─────────────────
 GROQ_API_KEY=tu_groq_key
+
+# ── Captions de memes / auto memes ────────────────────────────────
+GROQ_GUILD_COOLDOWN=10
 ```
 
 ### 3. Arrancar
@@ -128,37 +138,45 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 | `/shuffle` | Mezcla las canciones en la cola |
 | `/leave` | Sale del canal de voz |
 
-### 🧠 Markov y corpus
+### 🤖 Markov y chat
 
 | Comando | Descripción | Permisos |
 |---|---|---|
-| `/refeed` | Importa los últimos mensajes del canal al corpus (máx. 80 000 por defecto) | Gestionar servidor |
-| `/refeed_all` | Importa mensajes de todos los canales del servidor (máx. 20 000 por canal por defecto) | Gestionar servidor |
 | `/generar` | Genera un mensaje con el modelo Markov del servidor | Todos |
 | `/imitar @usuario` | Genera un mensaje imitando el estilo del usuario (mín. 30 msgs) | Todos |
-| `/corpus_info` | Muestra cuántos mensajes tiene el corpus en el canal actual | Todos |
+| `/chatmode on [#canal]` | Activa auto-reply al ser mencionado o al responderle | Gestionar servidor |
+| `/chatmode off` | Desactiva el auto-reply | Gestionar servidor |
+| `/corpus_info` | Muestra cuántos mensajes tiene el corpus del canal actual | Todos |
+| `/refeed` | Importa los últimos mensajes del canal al corpus (máx. 80 000 por defecto) | Gestionar servidor |
+| `/refeed_all` | Importa mensajes de todos los canales del servidor (máx. 20 000 por canal por defecto) | Gestionar servidor |
 | `/corpus_wipe` | Borra todo el corpus y reinicia la caché Markov | Gestionar servidor |
-
-### 🚫 Canales ignorados (corpus)
-
-| Comando | Descripción | Permisos |
-|---|---|---|
 | `/corpus_ignorar add #canal` | Añade un canal a la lista de ignorados | Gestionar servidor |
 | `/corpus_ignorar quitar #canal` | Quita un canal de la lista de ignorados | Gestionar servidor |
 | `/corpus_ignorar lista` | Lista canales ignorados | Gestionar servidor |
-
-### 💬 Chat automático
-
-| Comando | Descripción | Permisos |
-|---|---|---|
-| `/chatmode on [#canal]` | Activa auto-reply al ser mencionado o al responderle | Gestionar servidor |
-| `/chatmode off` | Desactiva el auto-reply | Gestionar servidor |
+| `/añadir_frase <texto>` | Agrega una frase al pool del servidor | Todos |
+| `/ver_frases` | Lista todas las frases con su ID y autor | Todos |
+| `/borrar_frase <id>` | Borra una frase (propia o cualquiera si sos admin) | Todos / Admin |
 
 ### 🎞️ GIFs
 
 | Comando | Descripción | Permisos |
 |---|---|---|
 | `/gif_add <url>` | Añade un GIF manualmente (Tenor, Giphy o Discord CDN) | Gestionar servidor |
+
+### ⚙️ Configuración
+
+| Comando | Descripción | Permisos |
+|---|---|---|
+| `/settings` | Abre el panel de configuración del servidor | Gestionar servidor |
+| `/setup` | Abre la guía de configuración inicial | Gestionar servidor |
+
+### ⭐ Premium
+
+| Comando | Descripción | Permisos |
+|---|---|---|
+| `/premium add <guild_id> [nota]` | Agrega un servidor al plan premium | Solo bot owner |
+| `/premium quitar <guild_id>` | Quita un servidor del plan premium | Solo bot owner |
+| `/premium lista` | Lista los servidores premium | Solo bot owner |
 
 ### 😂 Memes ⭐ (premium)
 
@@ -304,20 +322,26 @@ Una tarea en segundo plano sondea el RSS de cada canal suscrito cada **15 minuto
 ```
 .
 ├── src/
-│   ├── bot.py              # Lógica principal, eventos y slash commands
+│   ├── bot.py              # Punto de entrada, logging, DB y carga de cogs
+│   ├── config.py           # Variables de entorno y constantes compartidas
 │   ├── db.py               # Capa de datos: aiosqlite, WAL mode, migraciones
+│   ├── generation.py       # Limpieza de corpus, Markov y auto-respuestas
 │   ├── gif_gallery.py      # HTML de la galería pública (embebido)
+│   ├── help_view.py        # UI de /help
+│   ├── i18n.py             # Traducciones y locales por servidor
 │   ├── markov_engine.py    # Motor de cadenas de Markov
-│   ├── meme_generator.py   # Renderizado de memes con Pillow
-│   ├── music_commands.py   # Comandos de música (slash commands)
-│   └── music_player.py     # Player de audio: cola, loop, yt-dlp
+│   ├── meme_generator.py   # Renderizado de captions con Pillow
+│   ├── music_player.py     # Player de audio: cola, loop, yt-dlp
+│   ├── r2.py               # Integración con Cloudflare R2
+│   ├── utils.py            # Helpers compartidos
+│   ├── webapi.py           # API HTTP y galería
+│   └── cogs/               # Comandos y eventos por dominio
 ├── assets/
-│   └── Impact.ttf          # Fuente para renderizado de memes
+│   └── Impact.ttf          # Fuente para renderizado de captions
 ├── data/
 │   └── bot.db              # Base de datos SQLite (generada al arrancar)
 ├── requirements.txt
-├── .env.example
-└── .gitignore
+└── locales/               # Textos de interfaz por idioma
 ```
 
 ---
@@ -351,3 +375,5 @@ Al generar el enlace de invitación en el **Developer Portal**:
 > Al unirse a un servidor nuevo, el bot envía un embed de bienvenida con instrucciones de setup en el primer canal de texto disponible.
 
 > Los memes automáticos se verifican cada **10 minutos**; el intervalo configurado con `/meme_auto activar` define cada cuántas horas se postea.
+
+> El panel `/settings` y la guía `/setup` muestran el estado real del servidor, incluyendo chat, corpus, reacciones, YouTube y memes automáticos.
