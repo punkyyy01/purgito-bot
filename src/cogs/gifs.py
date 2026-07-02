@@ -9,7 +9,6 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import r2
-import webapi
 from config import PURGATORY_GUILD_ID
 from db import count_gif_urls, get_unresolved_gifs, is_channel_ignored, save_gif_url, update_gif_media_url
 from utils import has_admin_permission
@@ -79,14 +78,9 @@ class Gifs(commands.Cog):
 
     async def cog_load(self) -> None:
         self.resolve_gifs_task.start()
-        try:
-            await webapi.start_web_server(self.bot)
-        except Exception:
-            log.exception("Error iniciando el servidor web")
 
     async def cog_unload(self) -> None:
         self.resolve_gifs_task.cancel()
-        await webapi.stop_web_server()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

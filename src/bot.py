@@ -14,6 +14,7 @@ from discord.ext import commands
 
 import config  # ejecuta load_dotenv() al importarse
 import r2
+import webapi
 from db import close_db, init_db
 
 # Configurar logging
@@ -55,6 +56,7 @@ class PurgitoBot(commands.Bot):
             log.info("Extensión cargada: %s", extension)
 
     async def close(self) -> None:
+        await webapi.stop_web_server()
         log.info("Cerrando conexión a la base de datos...")
         await close_db()
         await super().close()
@@ -91,6 +93,13 @@ async def on_ready():
         log.exception("Error en la sincronización de comandos")
 
     log.info("Bot listo como %s", bot.user)
+
+    # Después de on_ready los guilds ya están cacheados; start_web_server es
+    # idempotente, así que reconexiones (on_ready repetido) no lo duplican.
+    try:
+        await webapi.start_web_server(bot)
+    except Exception:
+        log.exception("Error iniciando el servidor web")
 
 
 if __name__ == "__main__":
