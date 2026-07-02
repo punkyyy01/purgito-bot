@@ -1,5 +1,6 @@
 """Web API pública: galería de GIFs + health check + panel de configuración multi-guild."""
 
+import asyncio
 import hashlib
 import html
 import logging
@@ -163,18 +164,18 @@ async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
     if cached and cached[0] > now:
         return cached[1]
     try:
-        async with aiohttp.ClientSession() as http:
-            async with http.get(f"{_DISCORD_API}/users/@me/guilds",
-                                headers={"Authorization": f"Bearer {token}"}) as r:
-                if r.status != 200:
-                    log.warning("GET /users/@me/guilds devolvió %s para user %s "
-                                "(429 = rate limit de Discord en este endpoint)", r.status, user_id)
-                    if r.status == 429 and cached:
-                        # Rate limit transitorio: mejor servir la lista vencida que desloguear.
-                        return cached[1]
-                    return None
-                guilds = await r.json()
-    except aiohttp.ClientError:
+        http = request.app["http"]
+        async with http.get(f"{_DISCORD_API}/users/@me/guilds",
+                            headers={"Authorization": f"Bearer {token}"}) as r:
+            if r.status != 200:
+                log.warning("GET /users/@me/guilds devolvió %s para user %s "
+                            "(429 = rate limit de Discord en este endpoint)", r.status, user_id)
+                if r.status == 429 and cached:
+                    # Rate limit transitorio: mejor servir la lista vencida que desloguear.
+                    return cached[1]
+                return None
+            guilds = await r.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError):
         log.exception("Fallo consultando /users/@me/guilds")
         return None
     manage = _filter_manage_guilds(guilds)
@@ -317,33 +318,33 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
         raise web.HTTPFound("/auth/error")
 
     try:
-        async with aiohttp.ClientSession() as http:
-            # Canje del code por access_token (grant authorization_code).
-            async with http.post(f"{_DISCORD_API}/oauth2/token", data={
-                "client_id": DISCORD_CLIENT_ID,
-                "client_secret": DISCORD_CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
-            }) as r:
-                if r.status != 200:
-                    raise web.HTTPFound("/auth/error")
-                access = (await r.json()).get("access_token")
+        http = request.app["http"]
+        # Canje del code por access_token (grant authorization_code).
+        async with http.post(f"{_DISCORD_API}/oauth2/token", data={
+            "client_id": DISCORD_CLIENT_ID,
+            "client_secret": DISCORD_CLIENT_SECRET,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
+        }) as r:
+            if r.status != 200:
+                raise web.HTTPFound("/auth/error")
+            access = (await r.json()).get("access_token")
 
-            # Quién es el usuario.
-            async with http.get(f"{_DISCORD_API}/users/@me",
-                                headers={"Authorization": f"Bearer {access}"}) as r:
-                if r.status != 200:
-                    raise web.HTTPFound("/auth/error")
-                user = await r.json()
+        # Quién es el usuario.
+        async with http.get(f"{_DISCORD_API}/users/@me",
+                            headers={"Authorization": f"Bearer {access}"}) as r:
+            if r.status != 200:
+                raise web.HTTPFound("/auth/error")
+            user = await r.json()
 
-            # Guilds del usuario, para verificar que administre alguno donde esté el bot.
-            async with http.get(f"{_DISCORD_API}/users/@me/guilds",
-                                headers={"Authorization": f"Bearer {access}"}) as r:
-                if r.status != 200:
-                    raise web.HTTPFound("/auth/error")
-                user_guilds = await r.json()
-    except aiohttp.ClientError:
+        # Guilds del usuario, para verificar que administre alguno donde esté el bot.
+        async with http.get(f"{_DISCORD_API}/users/@me/guilds",
+                            headers={"Authorization": f"Bearer {access}"}) as r:
+            if r.status != 200:
+                raise web.HTTPFound("/auth/error")
+            user_guilds = await r.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError):
         log.exception("Fallo llamando a la API de Discord en el callback OAuth2")
         raise web.HTTPFound("/auth/error")
 
@@ -775,6 +776,8 @@ async def start_web_server(bot: commands.Bot) -> None:
         return
     app = web.Application(middlewares=[_cors_middleware])
     app["bot"] = bot
+    # Sesión HTTP compartida para llamadas a la API de Discord, con timeout global.
+    app["http"] = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
     app.router.add_get("/", _gallery)
     app.router.add_get("/api/gifs", _api_gif_list)
     app.router.add_get("/health", _api_health)
@@ -838,5 +841,8 @@ async def start_web_server(bot: commands.Bot) -> None:
 async def stop_web_server() -> None:
     global _runner
     if _runner is not None:
+        app = _runner.app
+        if app is not None and "http" in app:
+            await app["http"].close()
         await _runner.cleanup()
         _runner = None

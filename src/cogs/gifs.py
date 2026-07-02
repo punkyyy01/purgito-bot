@@ -97,14 +97,17 @@ class Gifs(commands.Cog):
 
     @tasks.loop(seconds=90)
     async def resolve_gifs_task(self):
-        gifs = await get_unresolved_gifs(PURGATORY_GUILD_ID, limit=25)
-        if not gifs:
-            return
-        for gif in gifs:
-            resolved = await resolve_media_url(gif["url"])
-            if resolved is not None:
-                await update_gif_media_url(gif["id"], resolved)
-            await asyncio.sleep(1.5)
+        try:
+            gifs = await get_unresolved_gifs(PURGATORY_GUILD_ID, limit=25)
+            if not gifs:
+                return
+            for gif in gifs:
+                resolved = await resolve_media_url(gif["url"])
+                if resolved is not None:
+                    await update_gif_media_url(gif["id"], resolved)
+                await asyncio.sleep(1.5)
+        except Exception:
+            log.exception("Error en resolve_gifs_task")
 
     @resolve_gifs_task.before_loop
     async def _wait_ready(self):

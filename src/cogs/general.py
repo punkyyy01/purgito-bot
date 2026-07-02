@@ -69,25 +69,28 @@ class General(commands.Cog):
 
     @tasks.loop(hours=24)
     async def guild_cleanup_task(self):
-        retention = env_int("GUILD_DATA_RETENTION_DAYS", 30)
-        expired = await get_expired_departures(retention)
-        if not expired:
-            return
-        purged = 0
-        for guild_id in expired:
-            try:
-                if r2.available() and r2.public_url():
-                    for item in await list_gif_urls(guild_id):
-                        await r2.delete_url(item["url"])
-                    for img_url in await list_image_urls(guild_id):
-                        await r2.delete_url(img_url)
-                await purge_guild_data(guild_id)
-                discard_premium_guild(guild_id)
-                purged += 1
-            except Exception:
-                log.exception("guild_cleanup: error purgando guild %s", guild_id)
-        if purged:
-            log.info("guild_cleanup: %d servidor(es) purgados", purged)
+        try:
+            retention = env_int("GUILD_DATA_RETENTION_DAYS", 30)
+            expired = await get_expired_departures(retention)
+            if not expired:
+                return
+            purged = 0
+            for guild_id in expired:
+                try:
+                    if r2.available() and r2.public_url():
+                        for item in await list_gif_urls(guild_id):
+                            await r2.delete_url(item["url"])
+                        for img_url in await list_image_urls(guild_id):
+                            await r2.delete_url(img_url)
+                    await purge_guild_data(guild_id)
+                    discard_premium_guild(guild_id)
+                    purged += 1
+                except Exception:
+                    log.exception("guild_cleanup: error purgando guild %s", guild_id)
+            if purged:
+                log.info("guild_cleanup: %d servidor(es) purgados", purged)
+        except Exception:
+            log.exception("Error en guild_cleanup_task")
 
     @guild_cleanup_task.before_loop
     async def _wait_ready(self):

@@ -4,6 +4,9 @@ import re
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
+# Rechaza imágenes descomprimidas gigantes (decompression bomb) antes de procesarlas.
+Image.MAX_IMAGE_PIXELS = 15_000_000
+
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FONT_PATH = os.path.join(_BASE_DIR, "assets", "Impact.ttf")
 
