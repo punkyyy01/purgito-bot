@@ -120,6 +120,19 @@ def require_login(handler):
 
 # ---------------- Permisos por guild ----------------
 
+def _filter_manage_guilds(guilds: list[dict]) -> list[dict]:
+    """Filtra los guilds donde el usuario es owner o tiene MANAGE_GUILD/ADMINISTRATOR."""
+    manage = []
+    for g in guilds:
+        try:
+            perms = int(g.get("permissions") or 0)
+        except (TypeError, ValueError):
+            perms = 0
+        if g.get("owner") or perms & (_MANAGE_GUILD | _ADMINISTRATOR):
+            manage.append(g)
+    return manage
+
+
 async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
     """Guilds del usuario donde tiene MANAGE_GUILD/owner, cacheados 5 min por user_id."""
     session = await get_session(request)
@@ -136,19 +149,14 @@ async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
             async with http.get(f"{_DISCORD_API}/users/@me/guilds",
                                 headers={"Authorization": f"Bearer {token}"}) as r:
                 if r.status != 200:
+                    log.warning("GET /users/@me/guilds devolvió %s para user %s "
+                                "(429 = rate limit de Discord en este endpoint)", r.status, user_id)
                     return None
                 guilds = await r.json()
     except aiohttp.ClientError:
         log.exception("Fallo consultando /users/@me/guilds")
         return None
-    manage = []
-    for g in guilds:
-        try:
-            perms = int(g.get("permissions") or 0)
-        except (TypeError, ValueError):
-            perms = 0
-        if g.get("owner") or perms & (_MANAGE_GUILD | _ADMINISTRATOR):
-            manage.append(g)
+    manage = _filter_manage_guilds(guilds)
     _user_guilds_cache[user_id] = (now + _GUILDS_CACHE_TTL, manage)
     return manage
 
@@ -318,11 +326,13 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
         log.exception("Fallo llamando a la API de Discord en el callback OAuth2")
         raise web.HTTPFound("/auth/error")
 
-    manage_ids = {
-        int(g["id"]) for g in user_guilds
-        if g.get("owner") or (_to_int(g.get("permissions")) or 0) & (_MANAGE_GUILD | _ADMINISTRATOR)
-    }
+    manage = _filter_manage_guilds(user_guilds)
+    manage_ids = {int(g["id"]) for g in manage}
     bot_guild_ids = {g.id for g in request.app["bot"].guilds}
+    # debug temporal: diagnóstico de no_guilds y de pérdida de sesión post-login.
+    log.info("OAuth callback user=%s: user_guilds=%d, manage_ids=%s, bot_guild_ids=%s, "
+             "intersección=%s", user["id"], len(user_guilds), manage_ids, bot_guild_ids,
+             manage_ids & bot_guild_ids)
     if not (manage_ids & bot_guild_ids):
         raise web.HTTPFound("/auth/error?reason=no_guilds")
 
@@ -331,13 +341,18 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     session["avatar_url"] = _avatar_url(user)
     # Solo server-side (cookie cifrada): se usa para consultar /users/@me/guilds.
     session["access_token"] = access
+    # Precarga el cache con los guilds recién obtenidos: /users/@me/guilds tiene un
+    # rate limit estricto por token (~1 req/s) y sin esto el primer /api/me/guilds
+    # del panel re-consulta a Discord ~1 s después del callback, recibe 429 → el
+    # panel responde 401 → el JS redirige a /auth/login como si no hubiera sesión.
+    _user_guilds_cache[user["id"]] = (time.monotonic() + _GUILDS_CACHE_TTL, manage)
     raise web.HTTPFound("/servers")
 
 
 async def _auth_logout(request: web.Request) -> web.StreamResponse:
     session = await get_session(request)
     session.invalidate()
-    raise web.HTTPFound("/")
+    raise web.HTTPFound("/auth/login")
 
 
 async def _auth_error(request: web.Request) -> web.Response:
@@ -352,7 +367,7 @@ async def _auth_error(request: web.Request) -> web.Response:
         "text-align:center;padding-top:15vh'>"
         "<h1 style='color:#8b0000'>Acceso denegado</h1>"
         f"<p>{message}</p>"
-        "<p><a href='/' style='color:#8b0000'>← volver</a></p>"
+        "<p><a href='/auth/login' style='color:#8b0000'>← volver a intentar</a></p>"
         "</body></html>"
     )
     return web.Response(text=body, content_type="text/html", charset="utf-8")
@@ -681,6 +696,22 @@ async def _api_server_gifs_delete(request: web.Request, guild_id: int) -> web.Re
 
 # ---------------- Server ----------------
 
+async def _log_auth_set_cookie(request: web.Request, response: web.StreamResponse) -> None:
+    # debug temporal: verifica que el Set-Cookie de sesión salga en las respuestas
+    # de /auth/* (se loggean atributos, nunca el valor cifrado).
+    if not request.path.startswith("/auth/"):
+        return
+    cookies = response.headers.getall("Set-Cookie", [])
+    if not cookies:
+        log.info("Respuesta %s %s SIN Set-Cookie", response.status, request.path)
+        return
+    for c in cookies:
+        name = c.split("=", 1)[0]
+        attrs = c.partition(";")[2].strip()
+        log.info("Respuesta %s %s Set-Cookie: %s=<cifrado>; %s",
+                 response.status, request.path, name, attrs)
+
+
 def _new_session_storage() -> EncryptedCookieStorage:
     # Derivamos 32 bytes exactos desde SESSION_SECRET (cualquier longitud) para Fernet.
     key = hashlib.sha256(SESSION_SECRET.encode()).digest()
@@ -702,6 +733,7 @@ async def start_web_server(bot: commands.Bot) -> None:
 
     if DASHBOARD_ENABLED:
         setup_session(app, _new_session_storage())
+        app.on_response_prepare.append(_log_auth_set_cookie)  # debug temporal
         app.router.add_post("/api/gifs", require_login(_api_gif_add))
         app.router.add_delete("/api/gifs/{id}", require_login(_api_gif_delete))
         app.router.add_get("/auth/login", _auth_login)
