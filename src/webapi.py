@@ -400,6 +400,23 @@ async def _auth_error(request: web.Request) -> web.Response:
 
 # ---------------- Páginas del panel ----------------
 
+_STATIC_DIR = Path(__file__).parent / "static"
+try:
+    _STATIC_V = str(int(max(
+        (_STATIC_DIR / "panel.js").stat().st_mtime,
+        (_STATIC_DIR / "panel.css").stat().st_mtime,
+    )))
+except OSError:
+    _STATIC_V = "1"
+
+
+def _versioned_static(html_text: str) -> str:
+    """Cloudflare cachea /static/*.js|css por 4 h; versionar la URL con el mtime
+    hace que cada deploy sirva assets frescos sin purgar el cache a mano."""
+    return (html_text
+            .replace("/static/panel.css", f"/static/panel.css?v={_STATIC_V}")
+            .replace("/static/panel.js", f"/static/panel.js?v={_STATIC_V}"))
+
 async def _dashboard(request: web.Request) -> web.StreamResponse:
     # Mantiene bookmarks viejos funcionando.
     raise web.HTTPFound("/servers")
@@ -407,7 +424,7 @@ async def _dashboard(request: web.Request) -> web.StreamResponse:
 
 async def _servers_page(request: web.Request) -> web.Response:
     session = await get_session(request)
-    body = (SELECTOR_HTML
+    body = _versioned_static(SELECTOR_HTML
             .replace("{{USERNAME}}", html.escape(str(session.get("username", ""))))
             .replace("{{AVATAR_URL}}", html.escape(str(session.get("avatar_url", "")))))
     return web.Response(text=body, content_type="text/html", charset="utf-8")
@@ -417,7 +434,7 @@ async def _server_page(request: web.Request) -> web.Response:
     guild_id = _to_int(request.match_info.get("guild_id"))
     if guild_id is None:
         raise web.HTTPNotFound()
-    body = PANEL_HTML.replace("{{GUILD_ID}}", str(guild_id))
+    body = _versioned_static(PANEL_HTML.replace("{{GUILD_ID}}", str(guild_id)))
     return web.Response(text=body, content_type="text/html", charset="utf-8")
 
 
