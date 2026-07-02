@@ -685,7 +685,8 @@ def _new_session_storage() -> EncryptedCookieStorage:
     # Derivamos 32 bytes exactos desde SESSION_SECRET (cualquier longitud) para Fernet.
     key = hashlib.sha256(SESSION_SECRET.encode()).digest()
     return EncryptedCookieStorage(key, cookie_name="PURGITO_SESSION",
-                                  max_age=7 * 24 * 3600, httponly=True, samesite="Lax")
+                                  max_age=7 * 24 * 3600, httponly=True,
+                                  samesite="Lax", secure=True)
 
 
 async def start_web_server(bot: commands.Bot) -> None:
