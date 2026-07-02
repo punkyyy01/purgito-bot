@@ -451,6 +451,40 @@ async function loadMemes() {
 
 // ---------- GIFs ----------
 
+function gifPreviewUrl(url) {
+  // URLs directas de media (R2 propio, CDNs de media o extensión de imagen): tal cual.
+  if (url.includes('media.tenor.com') || url.includes('media.giphy.com') ||
+      url.includes('cdn.discordapp.com') || url.includes('r2.') ||
+      /\.(gif|png|jpe?g|webp)(\?|$)/i.test(url)) {
+    return url;
+  }
+  // Página de Giphy → media URL directa (ID = último segmento tras el último guion).
+  if (url.includes('giphy.com/gifs/')) {
+    const id = url.split('/').pop().split('-').pop();
+    return id ? `https://media.giphy.com/media/${id}/giphy.gif` : null;
+  }
+  // Página de Tenor → intento de media URL; si no existe, onerror cae al placeholder.
+  if (url.includes('tenor.com/view/')) {
+    const id = url.split('/').pop().split('-').pop();
+    return id ? `https://media.tenor.com/${id}/tenor.gif` : null;
+  }
+  return null;
+}
+
+function gifPlaceholder(url) {
+  return el('a', {
+    class: 'gif-placeholder', href: url, target: '_blank', rel: 'noopener', title: url,
+  }, '🎞️');
+}
+
+function gifThumb(g) {
+  const src = g.media_url || gifPreviewUrl(g.url);
+  if (!src) return gifPlaceholder(g.url);
+  const img = el('img', { src, loading: 'lazy', alt: '' });
+  img.onerror = () => img.replaceWith(gifPlaceholder(g.url));
+  return img;
+}
+
 async function loadGifs() {
   const box = content();
   box.append(spinner());
@@ -476,8 +510,8 @@ async function loadGifs() {
     if (!data.gifs.length) grid.append(el('p', { class: 'dim' }, 'No hay GIFs guardados.'));
     for (const g of data.gifs) {
       grid.append(el('div', { class: 'gif-card' },
-        el('img', { src: g.media_url || g.url, loading: 'lazy', alt: '' }),
-        el('div', { class: 'gif-url' }, g.url),
+        gifThumb(g),
+        el('a', { class: 'gif-url', href: g.url, target: '_blank', rel: 'noopener' }, g.url),
         delBtn(box, () => apiFetch(`/api/server/${GUILD_ID}/settings/gifs/${g.id}`, { method: 'DELETE' }), loadGifs)));
     }
     box.append(grid);

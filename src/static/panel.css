@@ -261,12 +261,24 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
   gap: 6px;
 }
 .gif-card img { width: 100%; height: 110px; object-fit: cover; background: #000; border-radius: 3px; }
+.gif-placeholder {
+  width: 100%;
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  background: #000;
+  border-radius: 3px;
+  text-decoration: none;
+}
 .gif-card .gif-url {
   font-size: 11px;
   color: var(--text-dim);
   word-break: break-all;
   overflow: hidden;
   max-height: 28px;
+  display: block;
 }
 
 /* ---------- Responsive ---------- */
