@@ -15,13 +15,20 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import generation
 import i18n
 from cogs.premium import is_premium_guild
+from cogs.youtube import get_latest_video
 from config import BOT_TRIGGER_NAME
 from db import (
+    add_frase_especial,
     add_ignored_channel,
+    add_meme_schedule,
     add_reaction_to_pool,
+    add_youtube_sub,
+    delete_frase_especial,
     get_chat_settings,
+    list_frases_especiales,
     list_ignored_channels,
     list_meme_schedules,
     list_reaction_pool,
@@ -31,6 +38,9 @@ from db import (
     remove_reaction_from_pool,
     remove_youtube_sub,
     set_chat_mode,
+    set_youtube_mention_role,
+    update_last_video_id,
+    wipe_corpus,
 )
 from i18n import t
 
@@ -292,7 +302,40 @@ class CorpusCategory(SettingsCategory):
             await panel.refresh(interaction)
 
         channel_select.callback = on_channel
-        return [channel_select]
+
+        wipe_btn = discord.ui.Button(
+            label=t("settings.corpus.btn_wipe", panel.locale),
+            style=discord.ButtonStyle.danger,
+            row=2,
+        )
+
+        class WipeConfirmModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title=t("settings.corpus.wipe_modal_title", panel.locale))
+                self.confirm_input = discord.ui.TextInput(
+                    label=t("settings.corpus.wipe_modal_field", panel.locale)[:45],
+                    max_length=100,
+                )
+                self.add_item(self.confirm_input)
+
+            async def on_submit(self, interaction: discord.Interaction):
+                if self.confirm_input.value.strip() != panel.guild.name:
+                    await interaction.response.send_message(
+                        t("settings.corpus.wipe_mismatch", panel.locale), ephemeral=True
+                    )
+                    return
+                await wipe_corpus(panel.guild.id)
+                generation.reset_guild_caches(panel.guild.id)
+                await panel.refresh(interaction)
+                await interaction.followup.send(
+                    t("settings.corpus.wipe_success", panel.locale), ephemeral=True
+                )
+
+        async def on_wipe(interaction: discord.Interaction):
+            await interaction.response.send_modal(WipeConfirmModal())
+
+        wipe_btn.callback = on_wipe
+        return [channel_select, wipe_btn]
 
 
 class ReaccionesCategory(SettingsCategory):
@@ -363,6 +406,74 @@ class ReaccionesCategory(SettingsCategory):
         return items
 
 
+class FrasesCategory(SettingsCategory):
+    key = "frases"
+    emoji = "🗨️"
+
+    async def build_embed(self, panel: SettingsPanel) -> discord.Embed:
+        frases = await list_frases_especiales(panel.guild.id)
+        body = t("settings.frases.body", panel.locale)
+        if frases:
+            body += "\n\n" + "\n".join(f"`{f['id']}` — {f['frase']}" for f in frases)
+        else:
+            body += "\n\n" + t("settings.frases.none", panel.locale)
+        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+
+    async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
+        items: list[discord.ui.Item] = []
+
+        add_btn = discord.ui.Button(
+            label=t("settings.frases.btn_add", panel.locale),
+            style=discord.ButtonStyle.primary,
+            row=1,
+        )
+
+        class AddFraseModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title=t("settings.frases.modal_title", panel.locale))
+                self.frase_input = discord.ui.TextInput(
+                    label=t("settings.frases.modal_field", panel.locale)[:45],
+                    max_length=300,
+                )
+                self.add_item(self.frase_input)
+
+            async def on_submit(self, interaction: discord.Interaction):
+                text = self.frase_input.value.strip()
+                if not text:
+                    await interaction.response.send_message(
+                        t("settings.frases.invalid", panel.locale), ephemeral=True
+                    )
+                    return
+                await add_frase_especial(panel.guild.id, interaction.user.id, interaction.user.display_name, text)
+                await panel.refresh(interaction)
+
+        async def on_add(interaction: discord.Interaction):
+            await interaction.response.send_modal(AddFraseModal())
+
+        add_btn.callback = on_add
+        items.append(add_btn)
+
+        frases = await list_frases_especiales(panel.guild.id)
+        if frases:
+            remove_select = discord.ui.Select(
+                placeholder=t("settings.frases.remove_placeholder", panel.locale),
+                options=[
+                    discord.SelectOption(label=f["frase"][:100], value=str(f["id"]))
+                    for f in frases[:25]
+                ],
+                row=2,
+            )
+
+            async def on_remove(interaction: discord.Interaction):
+                await delete_frase_especial(panel.guild.id, int(remove_select.values[0]))
+                await panel.refresh(interaction)
+
+            remove_select.callback = on_remove
+            items.append(remove_select)
+
+        return items
+
+
 class YouTubeCategory(SettingsCategory):
     key = "youtube"
     emoji = "📺"
@@ -376,30 +487,138 @@ class YouTubeCategory(SettingsCategory):
             )
         else:
             body += "\n\n" + t("settings.youtube.none", panel.locale)
+        if getattr(panel, "yt_pending_channel", None):
+            body += "\n\n" + t("settings.youtube.add_pending_hint", panel.locale)
+        if getattr(panel, "yt_add_error", False):
+            body += "\n\n" + t("settings.youtube.add_invalid", panel.locale)
+            panel.yt_add_error = False
+        if getattr(panel, "yt_pending_mention", None):
+            body += "\n\n" + t("settings.youtube.mention_pending_hint", panel.locale)
         return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         subs = await list_youtube_subs(panel.guild.id)
-        if not subs:
-            return []
-        remove_select = discord.ui.Select(
-            placeholder=t("settings.youtube.remove_placeholder", panel.locale),
-            options=[
-                discord.SelectOption(
-                    label=s["youtube_channel_name"][:100],
-                    value=s["youtube_channel_id"],
+        items: list[discord.ui.Item] = []
+
+        if subs:
+            remove_select = discord.ui.Select(
+                placeholder=t("settings.youtube.remove_placeholder", panel.locale),
+                options=[
+                    discord.SelectOption(
+                        label=s["youtube_channel_name"][:100],
+                        value=s["youtube_channel_id"],
+                    )
+                    for s in subs[:25]
+                ],
+                row=1,
+            )
+
+            async def on_remove(interaction: discord.Interaction):
+                await remove_youtube_sub(panel.guild.id, remove_select.values[0])
+                await panel.refresh(interaction)
+
+            remove_select.callback = on_remove
+            items.append(remove_select)
+
+        pending_channel: str | None = getattr(panel, "yt_pending_channel", None)
+        if pending_channel:
+            dest_select = discord.ui.ChannelSelect(
+                channel_types=[discord.ChannelType.text],
+                placeholder=t("settings.youtube.add_channel_placeholder", panel.locale),
+                row=2,
+            )
+
+            async def on_dest_channel(interaction: discord.Interaction):
+                video = await get_latest_video(pending_channel)
+                panel.yt_pending_channel = None
+                if video is None:
+                    panel.yt_add_error = True
+                    await panel.refresh(interaction)
+                    return
+                channel_name = video["author"] or pending_channel
+                added = await add_youtube_sub(
+                    panel.guild.id,
+                    interaction.channel.id if interaction.channel else 0,
+                    pending_channel,
+                    channel_name,
+                    dest_select.values[0].id,
                 )
-                for s in subs[:25]
-            ],
-            row=1,
-        )
+                if added:
+                    await update_last_video_id(panel.guild.id, pending_channel, video["id"])
+                await panel.refresh(interaction)
 
-        async def on_remove(interaction: discord.Interaction):
-            await remove_youtube_sub(panel.guild.id, remove_select.values[0])
-            await panel.refresh(interaction)
+            dest_select.callback = on_dest_channel
+            items.append(dest_select)
+        else:
+            add_btn = discord.ui.Button(
+                label=t("settings.youtube.btn_add", panel.locale),
+                style=discord.ButtonStyle.primary,
+                row=2,
+            )
 
-        remove_select.callback = on_remove
-        return [remove_select]
+            class AddChannelModal(discord.ui.Modal):
+                def __init__(self):
+                    super().__init__(title=t("settings.youtube.add_modal_title", panel.locale))
+                    self.channel_input = discord.ui.TextInput(
+                        label=t("settings.youtube.add_modal_field", panel.locale)[:45],
+                        max_length=100,
+                    )
+                    self.add_item(self.channel_input)
+
+                async def on_submit(self, interaction: discord.Interaction):
+                    text = self.channel_input.value.strip()
+                    if not text:
+                        await interaction.response.send_message(
+                            t("settings.youtube.add_invalid", panel.locale), ephemeral=True
+                        )
+                        return
+                    panel.yt_pending_channel = text
+                    await panel.refresh(interaction)
+
+            async def on_add(interaction: discord.Interaction):
+                await interaction.response.send_modal(AddChannelModal())
+
+            add_btn.callback = on_add
+            items.append(add_btn)
+
+        pending_mention: str | None = getattr(panel, "yt_pending_mention", None)
+        if pending_mention:
+            role_select = discord.ui.RoleSelect(
+                placeholder=t("settings.youtube.mention_role_placeholder", panel.locale),
+                min_values=0,
+                max_values=1,
+                row=3,
+            )
+
+            async def on_role(interaction: discord.Interaction):
+                role_id = role_select.values[0].id if role_select.values else None
+                await set_youtube_mention_role(panel.guild.id, pending_mention, role_id)
+                panel.yt_pending_mention = None
+                await panel.refresh(interaction)
+
+            role_select.callback = on_role
+            items.append(role_select)
+        elif subs:
+            mention_select = discord.ui.Select(
+                placeholder=t("settings.youtube.mention_placeholder", panel.locale),
+                options=[
+                    discord.SelectOption(
+                        label=s["youtube_channel_name"][:100],
+                        value=s["youtube_channel_id"],
+                    )
+                    for s in subs[:25]
+                ],
+                row=3,
+            )
+
+            async def on_mention_target(interaction: discord.Interaction):
+                panel.yt_pending_mention = mention_select.values[0]
+                await panel.refresh(interaction)
+
+            mention_select.callback = on_mention_target
+            items.append(mention_select)
+
+        return items
 
 
 class MemesCategory(SettingsCategory):
@@ -419,31 +638,83 @@ class MemesCategory(SettingsCategory):
             )
         else:
             body += "\n\n" + t("settings.memes.none", panel.locale)
+        if getattr(panel, "memes_pending_interval", None):
+            body += "\n\n" + t("settings.memes.activate_pending_hint", panel.locale)
         return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         schedules = await list_meme_schedules(panel.guild.id)
-        if not schedules:
-            return []
-        channel_names = {
-            s["channel_id"]: getattr(panel.guild.get_channel(s["channel_id"]), "name", str(s["channel_id"]))
-            for s in schedules
-        }
-        remove_select = discord.ui.Select(
-            placeholder=t("settings.memes.remove_placeholder", panel.locale),
-            options=[
-                discord.SelectOption(label=f"#{channel_names[s['channel_id']]}"[:100], value=str(s["channel_id"]))
-                for s in schedules[:25]
-            ],
-            row=1,
-        )
+        items: list[discord.ui.Item] = []
 
-        async def on_remove(interaction: discord.Interaction):
-            await remove_meme_schedule(panel.guild.id, int(remove_select.values[0]))
-            await panel.refresh(interaction)
+        if schedules:
+            channel_names = {
+                s["channel_id"]: getattr(panel.guild.get_channel(s["channel_id"]), "name", str(s["channel_id"]))
+                for s in schedules
+            }
+            remove_select = discord.ui.Select(
+                placeholder=t("settings.memes.remove_placeholder", panel.locale),
+                options=[
+                    discord.SelectOption(label=f"#{channel_names[s['channel_id']]}"[:100], value=str(s["channel_id"]))
+                    for s in schedules[:25]
+                ],
+                row=1,
+            )
 
-        remove_select.callback = on_remove
-        return [remove_select]
+            async def on_remove(interaction: discord.Interaction):
+                await remove_meme_schedule(panel.guild.id, int(remove_select.values[0]))
+                await panel.refresh(interaction)
+
+            remove_select.callback = on_remove
+            items.append(remove_select)
+
+        pending_interval: int | None = getattr(panel, "memes_pending_interval", None)
+        if pending_interval:
+            channel_select = discord.ui.ChannelSelect(
+                channel_types=[discord.ChannelType.text],
+                placeholder=t("settings.memes.activate_channel_placeholder", panel.locale),
+                row=2,
+            )
+
+            async def on_channel(interaction: discord.Interaction):
+                await add_meme_schedule(panel.guild.id, channel_select.values[0].id, pending_interval * 60)
+                panel.memes_pending_interval = None
+                await panel.refresh(interaction)
+
+            channel_select.callback = on_channel
+            items.append(channel_select)
+        else:
+            activate_btn = discord.ui.Button(
+                label=t("settings.memes.btn_activate", panel.locale),
+                style=discord.ButtonStyle.primary,
+                row=2,
+            )
+
+            class ActivateModal(discord.ui.Modal):
+                def __init__(self):
+                    super().__init__(title=t("settings.memes.activate_modal_title", panel.locale))
+                    self.interval_input = discord.ui.TextInput(
+                        label=t("settings.memes.activate_modal_field", panel.locale)[:45],
+                        max_length=3,
+                    )
+                    self.add_item(self.interval_input)
+
+                async def on_submit(self, interaction: discord.Interaction):
+                    raw = self.interval_input.value.strip()
+                    if not raw.isdigit() or not (2 <= int(raw) <= 24):
+                        await interaction.response.send_message(
+                            t("settings.memes.activate_invalid", panel.locale), ephemeral=True
+                        )
+                        return
+                    panel.memes_pending_interval = int(raw)
+                    await panel.refresh(interaction)
+
+            async def on_activate(interaction: discord.Interaction):
+                await interaction.response.send_modal(ActivateModal())
+
+            activate_btn.callback = on_activate
+            items.append(activate_btn)
+
+        return items
 
 
 # Registro de categorías: agregar aquí las nuevas (orden = orden en el menú).
@@ -452,6 +723,7 @@ CATEGORIES: list[SettingsCategory] = [
     ChatCategory(),
     CorpusCategory(),
     ReaccionesCategory(),
+    FrasesCategory(),
     YouTubeCategory(),
     MemesCategory(),
 ]

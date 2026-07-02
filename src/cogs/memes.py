@@ -5,7 +5,6 @@ import io
 import logging
 import os
 import time
-from datetime import datetime, timezone
 
 import discord
 import requests
@@ -17,19 +16,16 @@ import r2
 from cogs.premium import is_premium_guild
 from config import BOT_TRIGGER_NAME, GROQ_API_KEY, GROQ_GUILD_COOLDOWN, MEME_MAX_BYTES
 from db import (
-    add_meme_schedule,
     delete_image_url,
     get_corpus_messages_filtered,
     get_due_meme_schedules,
     get_random_image_url_excluding,
-    list_meme_schedules,
-    remove_meme_schedule,
     save_image_url,
     update_meme_last_posted,
 )
 from generation import build_markov_model
 from meme_generator import _try_short_sentence, render_caption
-from utils import LRUDict, has_admin_permission
+from utils import LRUDict
 
 log = logging.getLogger(__name__)
 
@@ -436,96 +432,6 @@ class Memes(commands.Cog):
     @app_commands.command(name="meme", description="Genera un meme del server.")
     async def meme(self, interaction: discord.Interaction):
         await self._momo_impl(interaction)
-
-    meme_auto = app_commands.Group(
-        name="meme_auto",
-        description="Gestiona los memes automáticos por canal",
-    )
-
-    @meme_auto.command(name="activar", description="Activa memes automáticos en un canal.")
-    @app_commands.describe(
-        canal="Canal donde se postarán los memes",
-        intervalo="Intervalo en horas (mínimo 2, máximo 24)",
-    )
-    async def meme_auto_activar(self, interaction: discord.Interaction, canal: discord.TextChannel, intervalo: int):
-        if not interaction.guild:
-            await interaction.response.send_message("Solo en servidores.", ephemeral=True)
-            return
-        if not has_admin_permission(interaction):
-            await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
-            return
-        if not is_premium_guild(interaction.guild_id):
-            await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-            return
-        if intervalo < 2:
-            await interaction.response.send_message("el intervalo mínimo es 2 horas", ephemeral=True)
-            return
-        if intervalo > 24:
-            await interaction.response.send_message("el intervalo máximo es 24 horas", ephemeral=True)
-            return
-        await add_meme_schedule(interaction.guild.id, canal.id, intervalo * 60)
-        await interaction.response.send_message(
-            f"✅ Memes automáticos activados en {canal.mention} cada {intervalo} horas.",
-            ephemeral=True,
-        )
-
-    @meme_auto.command(name="desactivar", description="Desactiva los memes automáticos en un canal.")
-    @app_commands.describe(canal="Canal donde desactivar los memes automáticos")
-    async def meme_auto_desactivar(self, interaction: discord.Interaction, canal: discord.TextChannel):
-        if not interaction.guild:
-            await interaction.response.send_message("Solo en servidores.", ephemeral=True)
-            return
-        if not has_admin_permission(interaction):
-            await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
-            return
-        if not is_premium_guild(interaction.guild_id):
-            await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-            return
-        removed = await remove_meme_schedule(interaction.guild.id, canal.id)
-        if removed:
-            await interaction.response.send_message(
-                f"✅ Memes automáticos desactivados en {canal.mention}.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "ℹ️ ese canal no tenía memes automáticos",
-                ephemeral=True,
-            )
-
-    @meme_auto.command(name="lista", description="Muestra los canales con memes automáticos configurados.")
-    async def meme_auto_lista(self, interaction: discord.Interaction):
-        if not interaction.guild:
-            await interaction.response.send_message("Solo en servidores.", ephemeral=True)
-            return
-        if not has_admin_permission(interaction):
-            await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
-            return
-        if not is_premium_guild(interaction.guild_id):
-            await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
-            return
-        schedules = await list_meme_schedules(interaction.guild.id)
-        if not schedules:
-            await interaction.response.send_message("ℹ️ no hay canales configurados", ephemeral=True)
-            return
-        lines = []
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        for s in schedules:
-            horas = s["interval_minutes"] // 60
-            if s["last_posted_at"] is not None:
-                try:
-                    last_dt = datetime.fromisoformat(s["last_posted_at"])
-                    delta_h = int((now - last_dt).total_seconds() // 3600)
-                    ultimo = f"hace {delta_h} horas"
-                except Exception:
-                    ultimo = "desconocido"
-            else:
-                ultimo = "nunca"
-            lines.append(f"• <#{s['channel_id']}> — cada {horas} horas — último: {ultimo}")
-        await interaction.response.send_message(
-            "**Memes automáticos:**\n" + "\n".join(lines),
-            ephemeral=True,
-        )
 
 
 async def setup(bot: commands.Bot) -> None:
