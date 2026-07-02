@@ -1,15 +1,19 @@
 """Música: reproducción vía yt-dlp con cola, loop y controles con botones."""
 
+import logging
 import random
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from music_player import (
     EMBED_COLOR, LoopMode, SongInfo, fmt_duration,
     fetch_song, get_player, remove_player, MediaFetchError, YouTubeNotAllowed,
+    cleanup_zombie_players,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _voice_check(interaction: discord.Interaction) -> tuple[discord.VoiceChannel | None, str | None]:
@@ -169,6 +173,23 @@ class QueueView(discord.ui.View):
 class Musica(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self) -> None:
+        self.zombie_cleanup_task.start()
+
+    async def cog_unload(self) -> None:
+        self.zombie_cleanup_task.cancel()
+
+    @tasks.loop(minutes=10)
+    async def zombie_cleanup_task(self):
+        try:
+            await cleanup_zombie_players(self.bot)
+        except Exception:
+            log.exception("Error en zombie_cleanup_task")
+
+    @zombie_cleanup_task.before_loop
+    async def _wait_ready(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_voice_state_update(

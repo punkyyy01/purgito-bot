@@ -612,3 +612,40 @@ def get_player(guild_id: int) -> MusicPlayer:
 
 def remove_player(guild_id: int) -> None:
     _players.pop(guild_id, None)
+    _zombie_since.pop(guild_id, None)
+
+
+_ZOMBIE_TIMEOUT = 600  # segundos en estado zombie antes de limpiar
+_zombie_since: dict[int, float] = {}
+
+
+def _is_zombie_candidate(player: MusicPlayer) -> bool:
+    """Zombie: voice_client desconectado, o sin audio sonando y sin humanos en el canal.
+
+    Si hay usuarios en el canal (aunque esté pausado/inactivo), NO es zombie.
+    """
+    vc = player.voice_client
+    if vc is None or not vc.is_connected():
+        return True
+    if vc.is_playing():
+        return False
+    return not any(not m.bot for m in vc.channel.members)
+
+
+async def cleanup_zombie_players(bot) -> None:
+    """Limpia players que llevan más de _ZOMBIE_TIMEOUT en estado zombie."""
+    now = time.monotonic()
+    for guild_id, player in list(_players.items()):
+        if not _is_zombie_candidate(player):
+            _zombie_since.pop(guild_id, None)
+            continue
+        since = _zombie_since.setdefault(guild_id, now)
+        if now - since < _ZOMBIE_TIMEOUT:
+            continue
+        guild = bot.get_guild(guild_id)
+        log.info(
+            "zombie_cleanup: limpiando player de guild %s",
+            guild.name if guild else guild_id,
+        )
+        await player.cleanup()
+        remove_player(guild_id)

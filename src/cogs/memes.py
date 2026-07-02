@@ -29,7 +29,7 @@ from utils import LRUDict
 
 log = logging.getLogger(__name__)
 
-_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+_groq_client = AsyncGroq(api_key=GROQ_API_KEY, timeout=15.0) if GROQ_API_KEY else None
 
 _momo_cooldowns: LRUDict = LRUDict(512)
 _groq_cooldowns: LRUDict = LRUDict(256)
