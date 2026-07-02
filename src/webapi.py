@@ -283,6 +283,14 @@ async def _api_health(request: web.Request) -> web.Response:
 
 
 async def _gallery(request: web.Request) -> web.Response:
+    # No quitar: el panel y la galeria comparten el mismo server/puerto,
+    # sin este host-check panel.purg4t0ry.com muestra la galeria de GIFs.
+    host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
+    if "panel." in host:
+        session = await get_session(request)
+        if session.get("user_id"):
+            raise web.HTTPFound("/servers")
+        raise web.HTTPFound("/auth/login")
     return web.Response(text=GIF_GALLERY_HTML, content_type="text/html", charset="utf-8")
 
 
