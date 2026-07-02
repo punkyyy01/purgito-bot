@@ -59,6 +59,8 @@ DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
 DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+# URL pública del panel, mostrada en /help, /setup y /settings.
+PANEL_URL = os.getenv("PANEL_URL", "https://panel.purg4t0ry.com").rstrip("/")
 
 
 def get_invite_url(guild_id: str) -> str:

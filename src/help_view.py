@@ -5,6 +5,8 @@ El comando en sí vive en cogs/general.py; aquí solo están los embeds y la vis
 
 import discord
 
+from config import PANEL_URL
+
 PURGITO_COLOR = 0x8B00FF  # color de marca usado en todo el proyecto (welcome embed, music_player.py)
 
 INTRO_DESCRIPTION = (
@@ -104,6 +106,8 @@ def build_intro_embed(guild_name: str) -> discord.Embed:
         description=INTRO_DESCRIPTION,
         color=PURGITO_COLOR,
     )
+    # Field en vez de footer: los footers de Discord no renderizan links clickeables.
+    embed.add_field(name="⚙️ Panel web", value=f"Configura Purgito desde el navegador: {PANEL_URL}", inline=False)
     embed.set_footer(text=f"Comandos disponibles en {guild_name} · usa los botones de abajo")
     return embed
 

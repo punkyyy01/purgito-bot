@@ -6,7 +6,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -25,6 +25,7 @@ from config import (
     get_invite_url,
 )
 from cogs.premium import is_premium_guild
+from cogs.youtube import get_latest_video
 from db import (
     add_frase_especial,
     add_ignored_channel,
@@ -48,6 +49,7 @@ from db import (
     save_gif_url,
     set_chat_mode,
     set_youtube_mention_role,
+    update_last_video_id,
 )
 from gif_gallery import GIF_GALLERY_HTML
 from pages.panel import PANEL_HTML
@@ -71,6 +73,14 @@ _GUILDS_CACHE_TTL = 300.0
 _PUBLIC_GETS = ("/", "/api/gifs", "/health")
 
 
+def _client_ip(request: web.Request) -> str:
+    """IP real del cliente: detrás de Cloudflare + nginx, request.remote es siempre 127.0.0.1."""
+    return (request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote
+            or "unknown")
+
+
 def _rate_ok(store: LRUDict, ip: str, limit: int, window: float = 60.0) -> bool:
     now = time.monotonic()
     ts = [t for t in store.get(ip, []) if now - t < window]
@@ -83,7 +93,15 @@ def _rate_ok(store: LRUDict, ip: str, limit: int, window: float = 60.0) -> bool:
 
 
 def _valid_gif_url(url: str) -> bool:
-    if "tenor.com" in url or "giphy.com" in url:
+    # Se valida el host real, no un substring: "https://evil.com/tenor.com" no pasa.
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if url.startswith(("http://", "https://")) and (
+        host in ("tenor.com", "giphy.com")
+        or host.endswith((".tenor.com", ".giphy.com"))
+    ):
         return True
     pub = r2.public_url()
     return bool(pub and url.startswith(pub))
@@ -151,6 +169,9 @@ async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
                 if r.status != 200:
                     log.warning("GET /users/@me/guilds devolvió %s para user %s "
                                 "(429 = rate limit de Discord en este endpoint)", r.status, user_id)
+                    if r.status == 429 and cached:
+                        # Rate limit transitorio: mejor servir la lista vencida que desloguear.
+                        return cached[1]
                     return None
                 guilds = await r.json()
     except aiohttp.ClientError:
@@ -218,7 +239,7 @@ def _channel_name(guild, channel_id: int | None) -> str | None:
 # ---------------- GIF API ----------------
 
 async def _gif_add_impl(request: web.Request, guild_id: int) -> web.Response:
-    ip = request.remote or "unknown"
+    ip = _client_ip(request)
     if not _rate_ok(_rate_post, ip, 5):
         return web.json_response({"error": "rate limit"}, status=429)
     data = await _json_body(request)
@@ -231,7 +252,7 @@ async def _gif_add_impl(request: web.Request, guild_id: int) -> web.Response:
 
 
 async def _gif_delete_impl(request: web.Request, guild_id: int, raw_id: str) -> web.Response:
-    ip = request.remote or "unknown"
+    ip = _client_ip(request)
     if not _rate_ok(_rate_delete, ip, 3):
         return web.json_response({"error": "rate limit"}, status=429)
     gif_id = _to_int(raw_id)
@@ -353,6 +374,8 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
 
 async def _auth_logout(request: web.Request) -> web.StreamResponse:
     session = await get_session(request)
+    # Sin esto, un re-login del mismo user reutilizaría la lista de guilds del token anterior.
+    _user_guilds_cache.pop(session.get("user_id"), None)
     session.invalidate()
     raise web.HTTPFound("/auth/login")
 
@@ -597,11 +620,18 @@ async def _api_youtube_post(request: web.Request, guild_id: int) -> web.Response
     if data is None:
         return web.json_response({"error": "body inválido"}, status=400)
     yt_id = str(data.get("youtube_channel_id") or "").strip()
-    yt_name = str(data.get("youtube_channel_name") or "").strip()
+    yt_name = str(data.get("youtube_channel_name") or "").strip()[:100]
     discord_channel_id = _to_int(data.get("discord_channel_id"))
     if not yt_id or not yt_name or discord_channel_id is None:
         return web.json_response({"error": "faltan campos"}, status=400)
+    # Valida el canal contra el RSS y guarda el último video publicado; sin esto,
+    # el primer poll anunciaría como "nuevo" un video ya existente.
+    video = await get_latest_video(yt_id)
+    if video is None:
+        return web.json_response({"error": "canal de YouTube inválido o inaccesible"}, status=400)
     added = await add_youtube_sub(guild_id, 0, yt_id, yt_name, discord_channel_id)
+    if added:
+        await update_last_video_id(guild_id, yt_id, video["id"])
     return web.json_response({"added": added})
 
 

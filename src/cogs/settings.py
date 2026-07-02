@@ -19,7 +19,7 @@ import generation
 import i18n
 from cogs.premium import is_premium_guild
 from cogs.youtube import get_latest_video
-from config import BOT_TRIGGER_NAME
+from config import BOT_TRIGGER_NAME, PANEL_URL
 from db import (
     add_frase_especial,
     add_ignored_channel,
@@ -105,6 +105,8 @@ class SettingsPanel(discord.ui.View):
         self.invoker_id = invoker_id
         # (título, cuerpo) mostrado cuando no hay categoría elegida (portada /settings o /setup)
         self.intro = intro or (t("settings.title", locale), t("settings.intro", locale))
+        # Footer con el panel web solo en la portada de /settings; /setup ya lo menciona en el cuerpo.
+        self.show_panel_footer = intro is None
         self.current_key: str | None = None
 
     def _category(self) -> SettingsCategory | None:
@@ -117,7 +119,10 @@ class SettingsPanel(discord.ui.View):
         cat = self._category()
         if cat is None:
             title, body = self.intro
-            return discord.Embed(title=title, description=body, color=PURGITO_COLOR)
+            embed = discord.Embed(title=title, description=body, color=PURGITO_COLOR)
+            if self.show_panel_footer:
+                embed.set_footer(text=t("settings.panel_footer", self.locale, url=PANEL_URL))
+            return embed
         return await cat.build_embed(self)
 
     async def rebuild(self) -> None:
@@ -779,7 +784,8 @@ async def _send_setup_panel(interaction: discord.Interaction, locale: str) -> No
         interaction.guild,
         locale,
         interaction.user.id,
-        intro=(t("setup.title", locale), t("setup.body", locale)),
+        intro=(t("setup.title", locale),
+               t("setup.body", locale) + "\n\n" + t("setup.panel_cta", locale, url=PANEL_URL)),
     )
     await panel.rebuild()
     embed = await panel.build_embed()

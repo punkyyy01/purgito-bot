@@ -7,6 +7,7 @@
   "settings.premium_only": "⭐ This category is only available on premium servers.",
   "settings.guild_only": "This command only works in servers.",
   "settings.updated": "✅ Settings updated.",
+  "settings.panel_footer": "💻 Also available at {url}",
 
   "settings.cat.idioma.label": "Language",
   "settings.cat.idioma.desc": "Language for settings messages",
@@ -107,5 +108,6 @@
   "welcome.btn_configure": "⚙️ Set up Purgito",
 
   "setup.title": "🚀 Purgito initial setup",
-  "setup.body": "I'll walk you through the essential settings. Use the menu below to go through each category:\n\n**1. Language** — pick the bot's language 🌐\n**2. Chat** — decide whether the bot replies when mentioned and in which channel 💬\n**3. Ignored channels** — exclude sensitive channels (logs, announcements) 🚫\n\nWhen you're done, run `/refeed_all` so the bot learns from the server history. You can come back to this panel anytime with `/settings`."
+  "setup.body": "I'll walk you through the essential settings. Use the menu below to go through each category:\n\n**1. Language** — pick the bot's language 🌐\n**2. Chat** — decide whether the bot replies when mentioned and in which channel 💬\n**3. Ignored channels** — exclude sensitive channels (logs, announcements) 🚫\n\nWhen you're done, run `/refeed_all` so the bot learns from the server history. You can come back to this panel anytime with `/settings`.",
+  "setup.panel_cta": "💻 **Web panel:** configure everything from the web panel, no commands needed: {url}"
 }
