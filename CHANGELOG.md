@@ -11,11 +11,18 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 - Límites de almacenamiento por servidor: `MAX_CORPUS_MESSAGES_PER_GUILD` (50k), `MAX_USER_CORPUS_MESSAGES_PER_GUILD` (20k total del guild), `MAX_GIFS_PER_GUILD` (300), `MAX_IMAGES_PER_GUILD` (200) — eviction del registro más viejo al insertar uno nuevo, con limpieza de R2 cuando aplica.
 - Límite de tamaño de GIF antes de subir a R2: `MAX_GIF_DOWNLOAD_BYTES` (8MB default); GIFs más grandes se descartan silenciosamente sin guardar la URL en la DB.
 - Mensaje de bienvenida en `on_guild_join` adaptado: servidores no-premium no ven referencias a `/momo`, 🎯 ni memes. `/help` marca con ⭐ las funciones premium.
+- Categoría **Frases** en `/settings`: agregar, listar y borrar frases especiales desde el panel (antes solo por comando).
+- Categoría **YouTube** ampliada en `/settings`: ahora permite agregar suscripciones y configurar el rol de mención directo desde el panel, no solo remover.
+- Categoría **Memes** ampliada en `/settings`: ahora permite activar memes automáticos en un canal desde el panel (antes solo remover).
+- Categoría **Corpus** ampliada en `/settings`: botón para vaciar el corpus del servidor, con confirmación obligatoria (escribir el nombre exacto del servidor) antes de borrar.
 
 ### Changed
 - `is_home_guild()` renombrado a `is_premium_guild()` y ahora consulta un `set` en memoria cargado al arrancar (sin hit a DB por evento/comando).
 - `HOME_GUILD_ID` marcada como deprecada en `.env.example` — se sigue leyendo una vez para migrar, luego no tiene efecto en runtime.
 - Frases especiales (`/añadir_frase`, `/ver_frases`, `/borrar_frase`) y pool de reacciones (`/reacciones add|quitar|lista`) liberados del gate premium; ahora disponibles en todos los servidores.
+
+### Removed
+- `/chatmode`, `/corpus_ignorar` (`add`, `quitar`, `lista`), `/reacciones` (`add`, `quitar`, `lista`), `/youtube_add`, `/youtube_remove`, `/youtube_list`, `/youtube_set_mention`, `/meme_auto` (`activar`, `desactivar`, `lista`), `/añadir_frase`, `/ver_frases`, `/borrar_frase` y `/corpus_wipe` — reemplazados por completo por las categorías correspondientes del panel `/settings`. Total de slash commands: 43 → 25.
 
 ## [1.1.0] — 2026-06-28
 
