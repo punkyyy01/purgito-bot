@@ -333,7 +333,9 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     log.info("OAuth callback user=%s: user_guilds=%d, manage_ids=%s, bot_guild_ids=%s, "
              "intersección=%s", user["id"], len(user_guilds), manage_ids, bot_guild_ids,
              manage_ids & bot_guild_ids)
-    if not (manage_ids & bot_guild_ids):
+    # Basta con administrar algún servidor: si el bot no está en ninguno,
+    # /servers muestra la sección "Invitar Purgito" para añadirlo.
+    if not manage_ids:
         raise web.HTTPFound("/auth/error?reason=no_guilds")
 
     session["user_id"] = user["id"]
@@ -357,7 +359,7 @@ async def _auth_logout(request: web.Request) -> web.StreamResponse:
 
 async def _auth_error(request: web.Request) -> web.Response:
     if request.query.get("reason") == "no_guilds":
-        message = "Purgito no está en ningún servidor que administres."
+        message = "No administrás ningún servidor de Discord."
     else:
         message = "No se pudo completar el inicio de sesión con Discord."
     body = (
