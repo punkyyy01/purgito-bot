@@ -61,6 +61,18 @@ DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rs
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 
 
+def get_invite_url(guild_id: str) -> str:
+    """URL para invitar al bot a un guild concreto, con permisos mínimos calculados."""
+    return (
+        "https://discord.com/oauth2/authorize"
+        f"?client_id={DISCORD_CLIENT_ID}"
+        "&permissions=414539926592"
+        "&scope=bot%20applications.commands"
+        f"&guild_id={guild_id}"
+        "&disable_guild_select=true"
+    )
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:

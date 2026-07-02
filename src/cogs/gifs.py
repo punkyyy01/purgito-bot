@@ -80,7 +80,7 @@ class Gifs(commands.Cog):
     async def cog_load(self) -> None:
         self.resolve_gifs_task.start()
         try:
-            await webapi.start_web_server()
+            await webapi.start_web_server(self.bot)
         except Exception:
             log.exception("Error iniciando el servidor web")
 
