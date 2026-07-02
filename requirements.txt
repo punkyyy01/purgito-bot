@@ -10,3 +10,4 @@ Pillow
 groq
 yt-dlp
 PyNaCl
+aiohttp-session[secure]

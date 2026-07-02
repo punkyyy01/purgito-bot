@@ -5,11 +5,14 @@ load_dotenv() se ejecuta al importar este módulo, así que basta con importar
 config antes que cualquier otro módulo propio.
 """
 
+import logging
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+log = logging.getLogger(__name__)
 
 
 def env_int(name: str, default: int) -> int:
@@ -50,3 +53,38 @@ AUTO_GENERATE_EVERY = 15
 AUTO_GENERATE_PROBABILITY = float(os.getenv("AUTO_GENERATE_PROBABILITY", "0.6"))
 
 MEME_MAX_BYTES = 10 * 1024 * 1024
+
+# --- Dashboard web (Discord OAuth2) ---
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+# Por defecto se habilita si hay SESSION_SECRET; se puede forzar off sin borrar el resto.
+DASHBOARD_ENABLED = _env_bool("DASHBOARD_ENABLED", bool(SESSION_SECRET))
+
+if DASHBOARD_ENABLED:
+    _missing = [
+        name
+        for name, val in (
+            ("DISCORD_CLIENT_ID", DISCORD_CLIENT_ID),
+            ("DISCORD_CLIENT_SECRET", DISCORD_CLIENT_SECRET),
+            ("SESSION_SECRET", SESSION_SECRET),
+        )
+        if not val
+    ]
+    if _missing:
+        log.warning(
+            "Dashboard deshabilitado: faltan variables obligatorias %s. "
+            "Setealas en .env o pon DASHBOARD_ENABLED=false para silenciar este aviso.",
+            ", ".join(_missing),
+        )
+        DASHBOARD_ENABLED = False
