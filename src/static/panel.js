@@ -451,38 +451,46 @@ async function loadMemes() {
 
 // ---------- GIFs ----------
 
-function gifPreviewUrl(url) {
-  // URLs directas de media (R2 propio, CDNs de media o extensión de imagen): tal cual.
-  if (url.includes('media.tenor.com') || url.includes('media.giphy.com') ||
-      url.includes('cdn.discordapp.com') || url.includes('r2.') ||
-      /\.(gif|png|jpe?g|webp)(\?|$)/i.test(url)) {
-    return url;
+// Misma clasificación que la galería pública (gif_gallery.py).
+function classifyGif(gif) {
+  if (gif.media_url) return { type: 'img', src: gif.media_url };
+  const u = gif.url;
+  if (u.includes('cdn.discordapp.com')) return { type: 'img', src: u };
+  if (u.includes('giphy.com/gifs/')) {
+    const parts = u.split('/gifs/').pop().split('-');
+    const id = parts[parts.length - 1];
+    return { type: 'img', src: `https://media.giphy.com/media/${id}/giphy.gif` };
   }
-  // Página de Giphy → media URL directa (ID = último segmento tras el último guion).
-  if (url.includes('giphy.com/gifs/')) {
-    const id = url.split('/').pop().split('-').pop();
-    return id ? `https://media.giphy.com/media/${id}/giphy.gif` : null;
+  if (u.includes('tenor.com/view/')) {
+    const parts = u.split('/');
+    const id = parts[parts.length - 1].split('-').pop();
+    return { type: 'iframe', src: `https://tenor.com/embed/${id}` };
   }
-  // Página de Tenor → intento de media URL; si no existe, onerror cae al placeholder.
-  if (url.includes('tenor.com/view/')) {
-    const id = url.split('/').pop().split('-').pop();
-    return id ? `https://media.tenor.com/${id}/tenor.gif` : null;
-  }
-  return null;
+  return { type: 'link', src: null };
 }
 
-function gifPlaceholder(url) {
+function gifLinkCard(url) {
   return el('a', {
     class: 'gif-placeholder', href: url, target: '_blank', rel: 'noopener', title: url,
-  }, '🎞️');
+    style: 'flex-direction:column;gap:4px',
+  },
+    el('span', {}, '⛓'),
+    el('span', { style: 'font-size:10px;letter-spacing:0.15em' }, 'ABRIR GIF'));
 }
 
 function gifThumb(g) {
-  const src = g.media_url || gifPreviewUrl(g.url);
-  if (!src) return gifPlaceholder(g.url);
-  const img = el('img', { src, loading: 'lazy', alt: '' });
-  img.onerror = () => img.replaceWith(gifPlaceholder(g.url));
-  return img;
+  const { type, src } = classifyGif(g);
+  if (type === 'img') {
+    const img = el('img', { src, loading: 'lazy', alt: '' });
+    img.onerror = () => img.replaceWith(gifLinkCard(g.url));
+    return img;
+  }
+  if (type === 'iframe') {
+    const frame = el('iframe', { src, loading: 'lazy', frameborder: '0' });
+    frame.style.cssText = 'width:100%;height:110px;border:none;pointer-events:none;border-radius:3px;background:#000';
+    return frame;
+  }
+  return gifLinkCard(g.url);
 }
 
 async function loadGifs() {
