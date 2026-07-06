@@ -105,7 +105,9 @@ def _valid_gif_url(url: str) -> bool:
     ):
         return True
     pub = r2.public_url()
-    return bool(pub and url.startswith(pub))
+    # El prefijo termina en "/": sin eso, "https://pub.dominio.evil.com/x"
+    # pasaría el startswith de "https://pub.dominio".
+    return bool(pub and url.startswith(pub.rstrip("/") + "/"))
 
 
 @web.middleware
@@ -274,7 +276,11 @@ async def _api_gif_add(request: web.Request) -> web.Response:
 
 
 async def _api_gif_delete(request: web.Request) -> web.Response:
-    # Endpoint legacy: opera sobre PURG4TORY.
+    # Endpoint legacy: opera sobre PURG4TORY. Borrar es destructivo, así que
+    # no basta estar logueado: hay que poder administrar PURG4TORY.
+    denied = await check_guild_access(request, PURGATORY_GUILD_ID)
+    if denied is not None:
+        return denied
     return await _gif_delete_impl(request, PURGATORY_GUILD_ID, request.match_info.get("id", ""))
 
 
@@ -286,7 +292,8 @@ async def _gallery(request: web.Request) -> web.Response:
     # No quitar: el panel y la galeria comparten el mismo server/puerto,
     # sin este host-check panel.purg4t0ry.com muestra la galeria de GIFs.
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
-    if "panel." in host:
+    # Solo con dashboard activo: sin él no hay sesiones y get_session lanza RuntimeError (500).
+    if DASHBOARD_ENABLED and "panel." in host:
         session = await get_session(request)
         if session.get("user_id"):
             raise web.HTTPFound("/servers")
@@ -835,9 +842,9 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.router.add_delete(f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete)
         log.info("Dashboard OAuth2 habilitado")
     else:
-        # Sin dashboard: la escritura queda cerrada al público.
-        app.router.add_post("/api/gifs", _api_gif_add)
-        app.router.add_delete("/api/gifs/{id}", _api_gif_delete)
+        # Sin dashboard no hay login posible, así que la escritura queda
+        # realmente cerrada: no se registran POST/DELETE (responden 405).
+        log.info("Dashboard deshabilitado: escritura de /api/gifs cerrada al público")
 
     _runner = web.AppRunner(app)
     await _runner.setup()

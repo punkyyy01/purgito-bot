@@ -134,6 +134,22 @@ CREATE TABLE IF NOT EXISTS guild_departures (
     guild_id INTEGER PRIMARY KEY,
     left_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS channel_refeed_status (
+    guild_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    newest_message_id INTEGER,
+    oldest_message_id INTEGER,
+    backfill_complete INTEGER NOT NULL DEFAULT 0,
+    last_refed_at TEXT,
+    PRIMARY KEY (guild_id, channel_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_auto_refeed (
+    guild_id INTEGER PRIMARY KEY,
+    triggered_at TEXT NOT NULL,
+    completed_at TEXT
+);
 """
 
 
@@ -984,6 +1000,81 @@ async def get_expired_departures(retention_days: int) -> list[int]:
     return [r[0] for r in rows]
 
 
+# ─── Refeed status ───────────────────────────────────────────────────────────
+
+async def get_channel_refeed_status(guild_id: int, channel_id: int) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT newest_message_id, oldest_message_id, backfill_complete, last_refed_at "
+        "FROM channel_refeed_status WHERE guild_id=? AND channel_id=?",
+        (guild_id, channel_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "newest_message_id": row[0],
+        "oldest_message_id": row[1],
+        "backfill_complete": bool(row[2]),
+        "last_refed_at": row[3],
+    }
+
+
+async def upsert_channel_refeed_status(
+    guild_id: int,
+    channel_id: int,
+    *,
+    newest_message_id: int | None = None,
+    oldest_message_id: int | None = None,
+    backfill_complete: bool | None = None,
+) -> None:
+    """Actualiza solo los campos no-None; last_refed_at se pisa siempre."""
+    bf = None if backfill_complete is None else int(backfill_complete)
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "INSERT INTO channel_refeed_status "
+            "(guild_id, channel_id, newest_message_id, oldest_message_id, backfill_complete, last_refed_at) "
+            "VALUES (?, ?, ?, ?, COALESCE(?, 0), datetime('now')) "
+            "ON CONFLICT(guild_id, channel_id) DO UPDATE SET "
+            "    newest_message_id=COALESCE(excluded.newest_message_id, newest_message_id), "
+            "    oldest_message_id=COALESCE(excluded.oldest_message_id, oldest_message_id), "
+            "    backfill_complete=COALESCE(?, backfill_complete), "
+            "    last_refed_at=datetime('now')",
+            (guild_id, channel_id, newest_message_id, oldest_message_id, bf, bf),
+        )
+        await db.commit()
+
+
+async def was_auto_refeed_triggered(guild_id: int) -> bool:
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM guild_auto_refeed WHERE guild_id=?", (guild_id,)
+    ) as cursor:
+        return await cursor.fetchone() is not None
+
+
+async def mark_auto_refeed_triggered(guild_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "INSERT OR IGNORE INTO guild_auto_refeed (guild_id, triggered_at) "
+            "VALUES (?, datetime('now'))",
+            (guild_id,),
+        )
+        await db.commit()
+
+
+async def mark_auto_refeed_completed(guild_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "UPDATE guild_auto_refeed SET completed_at=datetime('now') WHERE guild_id=?",
+            (guild_id,),
+        )
+        await db.commit()
+
+
 async def purge_guild_data(guild_id: int) -> None:
     """Delete all DB rows for a guild. R2 cleanup must be handled by the caller first."""
     db = await get_db()
@@ -992,6 +1083,7 @@ async def purge_guild_data(guild_id: int) -> None:
         "corpus_images", "youtube_subscriptions", "ignored_channels",
         "meme_schedule", "frases_especiales", "reaction_pool",
         "premium_guilds", "guild_departures",
+        "channel_refeed_status", "guild_auto_refeed",
     ]
     async with _db_lock:
         for table in tables:

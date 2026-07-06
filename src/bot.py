@@ -66,8 +66,12 @@ bot = PurgitoBot(command_prefix="!", intents=intents)
 bot.remove_command("help")
 
 
+_commands_synced = False
+
+
 @bot.event
 async def on_ready():
+    global _commands_synced
     if not r2.available():
         log.warning(
             "R2 no configurado: las imágenes de Discord CDN se guardarán con su URL original "
@@ -75,22 +79,26 @@ async def on_ready():
             "R2_BUCKET_NAME y R2_PUBLIC_URL para persistencia permanente."
         )
 
-    try:
-        log.info("Iniciando sincronización de comandos")
+    # Solo una vez por proceso: on_ready también se dispara al reconectar, y
+    # re-sincronizar en cada reconexión puede agotar el rate limit de Discord.
+    if not _commands_synced:
+        try:
+            log.info("Iniciando sincronización de comandos")
 
-        # Sync global siempre — necesario para que cualquier servidor nuevo reciba los comandos.
-        synced = await bot.tree.sync()
-        log.info("Sync global: %s", [c.name for c in synced])
+            # Sync global siempre — necesario para que cualquier servidor nuevo reciba los comandos.
+            synced = await bot.tree.sync()
+            log.info("Sync global: %s", [c.name for c in synced])
 
-        if config.GUILD_ID_ENV:
-            # Sync instantáneo adicional a tu servidor de desarrollo (no reemplaza al global).
-            guild_obj = discord.Object(id=int(config.GUILD_ID_ENV))
-            bot.tree.copy_global_to(guild=guild_obj)
-            guild_synced = await bot.tree.sync(guild=guild_obj)
-            log.info("Sync instantáneo al servidor %s: %s", config.GUILD_ID_ENV, [c.name for c in guild_synced])
+            if config.GUILD_ID_ENV:
+                # Sync instantáneo adicional a tu servidor de desarrollo (no reemplaza al global).
+                guild_obj = discord.Object(id=int(config.GUILD_ID_ENV))
+                bot.tree.copy_global_to(guild=guild_obj)
+                guild_synced = await bot.tree.sync(guild=guild_obj)
+                log.info("Sync instantáneo al servidor %s: %s", config.GUILD_ID_ENV, [c.name for c in guild_synced])
 
-    except Exception:
-        log.exception("Error en la sincronización de comandos")
+            _commands_synced = True
+        except Exception:
+            log.exception("Error en la sincronización de comandos")
 
     log.info("Bot listo como %s", bot.user)
 

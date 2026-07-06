@@ -24,6 +24,9 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 ### Removed
 - `/chatmode`, `/corpus_ignorar` (`add`, `quitar`, `lista`), `/reacciones` (`add`, `quitar`, `lista`), `/youtube_add`, `/youtube_remove`, `/youtube_list`, `/youtube_set_mention`, `/meme_auto` (`activar`, `desactivar`, `lista`), `/añadir_frase`, `/ver_frases`, `/borrar_frase` y `/corpus_wipe` — reemplazados por completo por las categorías correspondientes del panel `/settings`. Total de slash commands: 43 → 25.
 
+### Fixed
+- El bot ya no responde `"..."` cuando todavía no tiene mensajes suficientes del servidor (el estado de cualquier servidor recién agregado): al mencionarlo/responderle o al usar `/generar` ahora explica en lenguaje simple que necesita aprender del historial y sugiere `/refeed_all` o `/setup`. En menciones, las instrucciones completas salen a lo sumo una vez cada 15 min por servidor (después responde una versión corta). Texto nuevo integrado a i18n (es/en).
+
 ## [1.1.0] — 2026-06-28
 
 ### Added

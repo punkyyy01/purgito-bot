@@ -95,9 +95,13 @@
   "settings.memes.activate_pending_hint": "Pick below the channel where memes will be posted.",
   "settings.memes.activate_invalid": "❌ The interval must be a number between 2 and 24.",
 
+  "chat.empty_reply.full": "I don't know how to talk like this server yet 😅 I need to read more of your messages first. An admin can run `/refeed_all` so I learn from the whole server history, or `/setup` to finish setting me up.",
+  "chat.empty_reply.short": "still drawing a blank over here 👀",
+
   "welcome.title": "Hi! I'm Purgito 👋",
   "welcome.intro": "I'm a Markov bot that learns to talk like your server.",
-  "welcome.getting_started": "**To get started:**\n• Run `/refeed_all` to import the message history into the corpus (requires *Manage Server* permission)\n• Run `/setup` or press the button below for the initial setup",
+  "welcome.getting_started": "**To get started:**\n• I already started reading this server's history — I'll let you know here when I'm done. Run `/refeed_all` anytime if you add new channels or want me to catch up\n• Run `/setup` or press the button below for the initial setup",
+  "welcome.auto_refeed_done": "🎉 Done! I've learned how this server talks — mention me to try it out.",
   "welcome.premium_target": "• React to images with 🎯 to add them to the `/momo` pool",
   "welcome.commands_header": "**Main commands:**",
   "welcome.commands": "🤖 `/generar` — generates a Markov message\n🎭 `/imitar @user` — imitates a member's style",

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
@@ -18,18 +19,34 @@ log = logging.getLogger(__name__)
 GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
 
 
+def _gif_host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_gif_site(host: str) -> bool:
+    return host in ("tenor.com", "giphy.com") or host.endswith((".tenor.com", ".giphy.com"))
+
+
 async def save_gif_candidates(guild_id: int, message: discord.Message) -> None:
     """Guarda en la colección los GIFs (tenor/giphy/cdn) del contenido y adjuntos de un mensaje."""
     if message.content:
         for m in GIF_RE.finditer(message.content):
             try:
                 url = m.group(0)
-                if "cdn.discordapp.com" in url:
+                # Se valida el host real: el regex matchea el dominio como
+                # substring y dejaría pasar "https://evil.com/?tenor.com".
+                host = _gif_host(url)
+                if host == "cdn.discordapp.com":
                     r2_url = await asyncio.to_thread(r2.upload_gif_sync, url, guild_id)
                     if r2_url == r2.GIF_TOO_LARGE:
                         continue
                     if r2_url:
                         url = r2_url
+                elif not _is_gif_site(host):
+                    continue
                 await save_gif_url(guild_id, url)
             except Exception:
                 log.exception("Error guardando GIF de mensaje: %s", m.group(0))
@@ -130,7 +147,8 @@ class Gifs(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         url = url.strip()
-        if "cdn.discordapp.com" in url:
+        host = _gif_host(url)
+        if host == "cdn.discordapp.com":
             final_url = await asyncio.to_thread(r2.upload_gif_sync, url, interaction.guild.id)
             if final_url == r2.GIF_TOO_LARGE:
                 await interaction.followup.send("❌ El GIF supera el límite de tamaño permitido.")
@@ -138,7 +156,7 @@ class Gifs(commands.Cog):
             if not final_url:
                 await interaction.followup.send("❌ No se pudo subir el GIF a R2. Comprueba que la URL sea accesible.")
                 return
-        elif "tenor.com" in url or "giphy.com" in url:
+        elif _is_gif_site(host):
             final_url = url
         else:
             await interaction.followup.send("❌ URL no reconocida. Solo se aceptan GIFs de tenor.com, giphy.com o cdn.discordapp.com.")

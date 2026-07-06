@@ -20,6 +20,7 @@ from db import (
     trim_corpus_if_needed,
     trim_user_corpus_if_needed,
 )
+from i18n import t
 from markov_engine import SimpleMarkov
 from utils import LRUDict
 
@@ -37,7 +38,21 @@ _user_markov_cache: LRUDict = LRUDict(64)
 _user_corpus_insert_counter: LRUDict = LRUDict(256)
 _special_phrase_cooldowns: LRUDict = LRUDict(256)
 
+# Aviso de "todavía no tengo mensajes" al mencionar al bot: la versión completa
+# (con instrucciones) sale a lo sumo una vez cada 15 min por guild.
+_EMPTY_REPLY_COOLDOWN = 15 * 60
+_empty_reply_cooldowns: LRUDict = LRUDict(256)
+
 _EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', regex.UNICODE)
+
+# Referencias a tasks fire-and-forget: sin esto el GC puede cancelar un trim en curso.
+_bg_tasks: set = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 _ANSI_ESCAPE_RE = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
 _ANSI_BRACKET_RE = re.compile(r'\]\d*;[^\]]*')
@@ -111,7 +126,7 @@ def note_corpus_insert(guild_id: int, channel_id: int) -> None:
     if n >= 50:
         _corpus_insert_counter[key] = 0
         _markov_cache.pop(guild_id, None)
-        asyncio.create_task(trim_corpus_if_needed(guild_id))
+        _spawn(trim_corpus_if_needed(guild_id))
     else:
         _corpus_insert_counter[key] = n
 
@@ -122,7 +137,7 @@ def note_user_corpus_insert(guild_id: int, author_id: int) -> None:
     if n >= 50:
         _user_corpus_insert_counter[key] = 0
         _user_markov_cache.pop(key, None)
-        asyncio.create_task(trim_user_corpus_if_needed(guild_id))
+        _spawn(trim_user_corpus_if_needed(guild_id))
     else:
         _user_corpus_insert_counter[key] = n
 
@@ -224,6 +239,23 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
         log.exception("Error generando frase Markov para usuario %s", author_id)
         sentence = None
     return sentence
+
+
+def empty_corpus_reply(guild_id: int, locale: str, throttle: bool = False) -> str:
+    """Mensaje amigable cuando el bot aún no tiene mensajes suficientes para generar.
+
+    Con throttle=False (/generar, pedido explícito) siempre devuelve la versión
+    completa con instrucciones. Con throttle=True (menciones/replies) la versión
+    completa sale a lo sumo una vez por guild cada _EMPTY_REPLY_COOLDOWN; dentro
+    del cooldown se responde una versión corta para no repetir el sermón.
+    """
+    if throttle:
+        now = time.monotonic()
+        last = _empty_reply_cooldowns.get(guild_id)
+        if last is not None and now - last < _EMPTY_REPLY_COOLDOWN:
+            return t("chat.empty_reply.short", locale)
+        _empty_reply_cooldowns[guild_id] = now
+    return t("chat.empty_reply.full", locale)
 
 
 async def generate_response(guild_id: int) -> tuple[str | None, bool]:

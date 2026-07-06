@@ -47,11 +47,8 @@ CATEGORIES = {
         "commands": [
             ("/generar", "genera un mensaje con Markov"),
             ("/imitar @usuario", "imita el estilo de un miembro"),
-            ("/chatmode on|off [#canal]", "activa/desactiva auto-reply"),
             ("/corpus_info", "mensajes en el corpus del canal"),
-            ("/añadir_frase <texto>", "agrega una frase especial al pool"),
-            ("/ver_frases", "lista las frases especiales"),
-            ("/borrar_frase <id>", "borra una frase especial"),
+            ("/settings → Chat / Frases", "auto-reply y frases especiales"),
         ],
     },
     "memes": {
@@ -63,9 +60,8 @@ CATEGORIES = {
         "commands": [
             ("/momo · /meme", "genera un meme del pool de imágenes"),
             ('Reply a una imagen + “generar”', "meme de esa imagen"),
-            ("/meme_auto activar #canal <horas>", "memes automáticos"),
-            ("/meme_auto desactivar #canal", "desactiva memes automáticos"),
-            ("/meme_auto lista", "canales con memes automáticos"),
+            ("Reacción 🎯 a una imagen", "la agrega al pool de memes"),
+            ("/settings → Memes", "memes automáticos por canal"),
         ],
     },
     "youtube": {
@@ -74,10 +70,7 @@ CATEGORIES = {
         "title": "📺 YouTube",
         "row": 1,
         "commands": [
-            ("/youtube_add <id> #canal [rol]", "suscribe un canal de YouTube"),
-            ("/youtube_remove <id>", "elimina una suscripción"),
-            ("/youtube_list", "lista suscripciones activas"),
-            ("/youtube_set_mention <id> [rol]", "configura mención"),
+            ("/settings → YouTube", "suscribe canales, elige dónde anunciar y qué rol mencionar"),
         ],
     },
     "admin": {
@@ -90,10 +83,8 @@ CATEGORIES = {
             ("/setup", "guía de configuración inicial"),
             ("/refeed", "importa mensajes del canal al corpus"),
             ("/refeed_all", "importa todos los canales"),
-            ("/corpus_wipe", "borra el corpus del servidor"),
-            ("/corpus_ignorar add|quitar|lista", "gestiona canales ignorados"),
+            ("/settings → Corpus / Reacciones", "canales ignorados, wipe del corpus y pool de emojis"),
             ("/gif_add <url>", "agrega un GIF a la colección ⭐"),
-            ("/reacciones add|quitar|lista", "pool de emojis de reacción"),
             ("!ping", "verifica que el bot está online"),
         ],
     },

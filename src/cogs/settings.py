@@ -33,6 +33,8 @@ from db import (
     list_meme_schedules,
     list_reaction_pool,
     list_youtube_subs,
+    mark_auto_refeed_completed,
+    mark_auto_refeed_triggered,
     remove_ignored_channel,
     remove_meme_schedule,
     remove_reaction_from_pool,
@@ -40,6 +42,7 @@ from db import (
     set_chat_mode,
     set_youtube_mention_role,
     update_last_video_id,
+    was_auto_refeed_triggered,
     wipe_corpus,
 )
 from i18n import t
@@ -807,14 +810,41 @@ class Settings(commands.Cog):
         locale = await i18n.guild_locale(guild.id)
         embed = build_welcome_embed(guild, locale)
         view = WelcomeView(locale)
+        welcome_channel = None
         for channel in guild.text_channels:
             perms = channel.permissions_for(guild.me)
             if perms.send_messages:
                 try:
                     await channel.send(embed=embed, view=view)
+                    welcome_channel = channel
                 except Exception:
                     log.warning("on_guild_join: no se pudo enviar mensaje en %s (%s)", channel.id, guild.id)
                 break
+
+        # Auto-refeed: leer el historial sin esperar a que un admin corra /refeed_all.
+        if welcome_channel is None:
+            return
+        if await was_auto_refeed_triggered(guild.id):
+            return
+        chat_cog = self.bot.get_cog("Chat")
+        if chat_cog is None:
+            log.warning("on_guild_join: cog Chat no cargado, no se dispara el auto-refeed (%s)", guild.id)
+            return
+        await mark_auto_refeed_triggered(guild.id)
+        try:
+            progress_msg = await welcome_channel.send("🔄 Empezando a leer el historial de los canales…")
+        except Exception:
+            log.warning("on_guild_join: no se pudo enviar el mensaje de progreso del auto-refeed (%s)", guild.id)
+            return
+
+        async def on_done():
+            await mark_auto_refeed_completed(guild.id)
+            try:
+                await welcome_channel.send(t("welcome.auto_refeed_done", locale))
+            except Exception:
+                log.warning("auto-refeed: no se pudo enviar el mensaje final (%s)", guild.id)
+
+        chat_cog.start_refeed_all(guild, progress_msg, welcome_channel, on_done=on_done)
 
     @app_commands.command(name="settings", description="Abre el panel de configuración del servidor.")
     async def settings(self, interaction: discord.Interaction):

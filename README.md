@@ -1,4 +1,4 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![CI](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml/badge.svg)](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white)](https://github.com/Rapptz/discord.py)
+[![License: MIT + Commons Clause](https://img.shields.io/badge/License-MIT%20%2B%20Commons%20Clause-yellow.svg)](LICENSE) [![CI](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml/badge.svg)](https://github.com/punkyyy01/bot-discord-purg/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white)](https://github.com/Rapptz/discord.py)
 
 <div align="center">
 
@@ -377,3 +377,9 @@ Al generar el enlace de invitación en el **Developer Portal**:
 > Los memes automáticos se verifican cada **10 minutos**; el intervalo configurado con `/meme_auto activar` define cada cuántas horas se postea.
 
 > El panel `/settings` y la guía `/setup` muestran el estado real del servidor, incluyendo chat, corpus, reacciones, YouTube y memes automáticos.
+
+---
+
+## 📄 Licencia
+
+Este proyecto usa **MIT + Commons Clause**: sos libre de usarlo, modificarlo, hacer forks y redistribuirlo, pero no está permitido venderlo ni ofrecerlo como servicio pago (hosting, SaaS, soporte) cuyo valor derive sustancialmente del bot. Ver [LICENSE](LICENSE) para el texto completo.

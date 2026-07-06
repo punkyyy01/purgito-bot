@@ -5,6 +5,7 @@ import logging
 
 import discord
 import feedparser
+import requests
 from discord.ext import commands, tasks
 
 from db import get_all_youtube_subs, update_last_video_id
@@ -15,7 +16,14 @@ log = logging.getLogger(__name__)
 async def get_latest_video(youtube_channel_id: str) -> dict | None:
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={youtube_channel_id}"
     try:
-        feed = await asyncio.to_thread(feedparser.parse, url)
+        # Se descarga con timeout explícito: feedparser.parse(url) usa urllib
+        # sin timeout y puede colgar el thread (y con él, el loop de chequeo).
+        def _fetch():
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            return feedparser.parse(resp.content)
+
+        feed = await asyncio.to_thread(_fetch)
         if not feed.entries:
             return None
         entry = feed.entries[0]
