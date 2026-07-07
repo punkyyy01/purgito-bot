@@ -36,7 +36,9 @@ class General(commands.Cog):
     async def ping(self, ctx: commands.Context):
         await ctx.send("Pong!")
 
-    @app_commands.command(name="help", description="Muestra los comandos de Purgito y cómo usarlos.")
+    @app_commands.command(
+        name="help", description="Muestra los comandos de Purgito y cómo usarlos."
+    )
     async def help(self, interaction: discord.Interaction):
         guild_name = interaction.guild.name if interaction.guild else "este servidor"
         embed = build_intro_embed(guild_name)
@@ -65,7 +67,11 @@ class General(commands.Cog):
         if guild.id == PURGATORY_GUILD_ID:
             return
         await mark_guild_departed(guild.id)
-        log.info("on_guild_remove: guild %s (%s) marcado para limpieza diferida", guild.id, guild.name)
+        log.info(
+            "on_guild_remove: guild %s (%s) marcado para limpieza diferida",
+            guild.id,
+            guild.name,
+        )
 
     @tasks.loop(hours=24)
     async def guild_cleanup_task(self):

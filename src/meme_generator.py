@@ -13,13 +13,14 @@ _FONT_PATH = os.path.join(_BASE_DIR, "assets", "Impact.ttf")
 
 def _try_short_sentence(model, max_chars: int = 80, tries: int = 100) -> str | None:
     import re
-    _DIGITS_RE = re.compile(r'\b\d{5,}\b')
+
+    _DIGITS_RE = re.compile(r"\b\d{5,}\b")
     for _ in range(tries):
         candidate = model.generate(max_words=12, max_attempts=1, min_words=2)
         if not candidate:
             continue
-        candidate = _DIGITS_RE.sub('', candidate).strip()
-        candidate = re.sub(r'\s+', ' ', candidate).strip()
+        candidate = _DIGITS_RE.sub("", candidate).strip()
+        candidate = re.sub(r"\s+", " ", candidate).strip()
         if candidate and len(candidate) <= max_chars:
             return candidate
     return None
@@ -34,9 +35,10 @@ def render_caption(image_bytes: bytes, caption: str) -> bytes:
 
     text_upper = caption.upper()
     import unicodedata
-    text_upper = unicodedata.normalize('NFKD', text_upper)
-    text_upper = ''.join(c for c in text_upper if not unicodedata.combining(c))
-    text_upper = re.sub(r'\s+', ' ', text_upper).strip()
+
+    text_upper = unicodedata.normalize("NFKD", text_upper)
+    text_upper = "".join(c for c in text_upper if not unicodedata.combining(c))
+    text_upper = re.sub(r"\s+", " ", text_upper).strip()
     padding_h = int(img_w * 0.05)
     usable_w = img_w - 2 * padding_h
 
@@ -48,7 +50,9 @@ def render_caption(image_bytes: bytes, caption: str) -> bytes:
         f = ImageFont.truetype(_FONT_PATH, font_size)
         avg_char_w = max(1, f.getlength("A"))
         chars_per_line = max(1, int(usable_w / avg_char_w))
-        wrapped = textwrap.wrap(text_upper, width=chars_per_line) or [text_upper[:max(1, chars_per_line)]]
+        wrapped = textwrap.wrap(text_upper, width=chars_per_line) or [
+            text_upper[: max(1, chars_per_line)]
+        ]
         if all(f.getlength(line) <= usable_w for line in wrapped):
             font = f
             lines = wrapped
@@ -60,7 +64,9 @@ def render_caption(image_bytes: bytes, caption: str) -> bytes:
         font = ImageFont.truetype(_FONT_PATH, font_size)
         avg_char_w = max(1, font.getlength("A"))
         chars_per_line = max(1, int(usable_w / avg_char_w))
-        lines = textwrap.wrap(text_upper, width=chars_per_line) or [text_upper[:max(1, chars_per_line)]]
+        lines = textwrap.wrap(text_upper, width=chars_per_line) or [
+            text_upper[: max(1, chars_per_line)]
+        ]
 
     ascent, descent = font.getmetrics()
     line_h = ascent + descent
@@ -91,11 +97,18 @@ def render_caption(image_bytes: bytes, caption: str) -> bytes:
     return buf.getvalue()
 
 
-import random as _random
+import random as _random  # noqa: E402
 
 _SPLIT_CONNECTORS = [
-    "HASTA QUE", "Y ENTONCES",
-    "PERO", "CUANDO", "VS", "MIENTRAS", "ENTONCES", "PORQUE", "O",
+    "HASTA QUE",
+    "Y ENTONCES",
+    "PERO",
+    "CUANDO",
+    "VS",
+    "MIENTRAS",
+    "ENTONCES",
+    "PORQUE",
+    "O",
 ]
 
 
@@ -104,13 +117,14 @@ def _find_connector_split(words: list[str]) -> tuple[str, str] | None:
         conn_words = connector.split()
         n = len(conn_words)
         for i in range(1, len(words) - n):
-            if words[i:i + n] == conn_words:
+            if words[i : i + n] == conn_words:
                 return " ".join(words[:i]), " ".join(words[i:])
     return None
 
 
 def render_meme(image_bytes: bytes, caption: str) -> bytes:
     import unicodedata
+
     base = Image.open(io.BytesIO(image_bytes))
     if hasattr(base, "n_frames") and base.n_frames > 1:
         base.seek(0)
@@ -118,9 +132,9 @@ def render_meme(image_bytes: bytes, caption: str) -> bytes:
     img_w, img_h = base.size
 
     text = caption.upper()
-    text = unicodedata.normalize('NFKD', text)
-    text = ''.join(c for c in text if not unicodedata.combining(c))
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return image_bytes
 
@@ -150,7 +164,7 @@ def render_meme(image_bytes: bytes, caption: str) -> bytes:
             avg_char_w = max(1, f.getlength("A"))
             chars_per_line = max(1, int(usable_w / avg_char_w))
             wrapped = textwrap.wrap(txt, width=chars_per_line) or [txt[:chars_per_line]]
-            if all(f.getlength(l) <= usable_w for l in wrapped):
+            if all(f.getlength(ln) <= usable_w for ln in wrapped):
                 font = f
                 lines = wrapped
                 break

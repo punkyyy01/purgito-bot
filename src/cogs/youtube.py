@@ -27,7 +27,9 @@ async def get_latest_video(youtube_channel_id: str) -> dict | None:
         if not feed.entries:
             return None
         entry = feed.entries[0]
-        video_id = getattr(entry, "yt_videoid", None) or entry.get("id", "").split(":")[-1]
+        video_id = (
+            getattr(entry, "yt_videoid", None) or entry.get("id", "").split(":")[-1]
+        )
         if not video_id:
             return None
         return {
@@ -70,9 +72,13 @@ class YouTube(commands.Cog):
                             f"{mention}📺 **{video['author']}** subió un video nuevo!\n"
                             f"**{video['title']}**\n{video['url']}"
                         )
-                        await update_last_video_id(sub["guild_id"], sub["youtube_channel_id"], video["id"])
+                        await update_last_video_id(
+                            sub["guild_id"], sub["youtube_channel_id"], video["id"]
+                        )
             except Exception:
-                log.exception("Error procesando suscripción YouTube %s", sub["youtube_channel_id"])
+                log.exception(
+                    "Error procesando suscripción YouTube %s", sub["youtube_channel_id"]
+                )
 
         await asyncio.gather(*(_check_one(sub) for sub in subs))
 

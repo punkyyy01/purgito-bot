@@ -50,7 +50,9 @@ class Premium(commands.Cog):
 
     @premium.command(name="add", description="Agrega un servidor al plan premium.")
     @app_commands.describe(guild_id="ID del servidor", nota="Nota opcional")
-    async def premium_add(self, interaction: discord.Interaction, guild_id: str, nota: str | None = None):
+    async def premium_add(
+        self, interaction: discord.Interaction, guild_id: str, nota: str | None = None
+    ):
         if not _is_owner(interaction):
             await interaction.response.send_message("no tenés permiso", ephemeral=True)
             return
@@ -64,9 +66,13 @@ class Premium(commands.Cog):
             _premium_guild_ids.add(gid)
             guild_obj = self.bot.get_guild(gid)
             name = guild_obj.name if guild_obj else str(gid)
-            await interaction.response.send_message(f"✅ `{name}` ({gid}) agregado como premium.", ephemeral=True)
+            await interaction.response.send_message(
+                f"✅ `{name}` ({gid}) agregado como premium.", ephemeral=True
+            )
         else:
-            await interaction.response.send_message(f"ℹ️ El servidor `{gid}` ya era premium.", ephemeral=True)
+            await interaction.response.send_message(
+                f"ℹ️ El servidor `{gid}` ya era premium.", ephemeral=True
+            )
 
     @premium.command(name="quitar", description="Quita un servidor del plan premium.")
     @app_commands.describe(guild_id="ID del servidor")
@@ -82,9 +88,13 @@ class Premium(commands.Cog):
         removed = await remove_premium_guild(gid)
         if removed:
             _premium_guild_ids.discard(gid)
-            await interaction.response.send_message(f"✅ Servidor `{gid}` quitado del plan premium.", ephemeral=True)
+            await interaction.response.send_message(
+                f"✅ Servidor `{gid}` quitado del plan premium.", ephemeral=True
+            )
         else:
-            await interaction.response.send_message(f"ℹ️ El servidor `{gid}` no estaba en premium.", ephemeral=True)
+            await interaction.response.send_message(
+                f"ℹ️ El servidor `{gid}` no estaba en premium.", ephemeral=True
+            )
 
     @premium.command(name="lista", description="Lista los servidores premium.")
     async def premium_lista(self, interaction: discord.Interaction):
@@ -93,14 +103,18 @@ class Premium(commands.Cog):
             return
         guilds_list = await list_premium_guilds()
         if not guilds_list:
-            await interaction.response.send_message("ℹ️ No hay servidores premium registrados.", ephemeral=True)
+            await interaction.response.send_message(
+                "ℹ️ No hay servidores premium registrados.", ephemeral=True
+            )
             return
         lines = []
         for g in guilds_list:
             guild_obj = self.bot.get_guild(g["guild_id"])
             name = guild_obj.name if guild_obj else "—"
             note = f" — {g['note']}" if g["note"] else ""
-            lines.append(f"• `{g['guild_id']}` {name} (desde {g['added_at'][:10]}){note}")
+            lines.append(
+                f"• `{g['guild_id']}` {name} (desde {g['added_at'][:10]}){note}"
+            )
         body = "**Servidores premium:**\n" + "\n".join(lines)
         if len(body) > 1900:
             body = body[:1900] + "\n…"

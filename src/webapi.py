@@ -76,10 +76,12 @@ _PUBLIC_GETS = ("/", "/api/gifs", "/health")
 
 def _client_ip(request: web.Request) -> str:
     """IP real del cliente: detrás de Cloudflare + nginx, request.remote es siempre 127.0.0.1."""
-    return (request.headers.get("CF-Connecting-IP")
-            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or request.remote
-            or "unknown")
+    return (
+        request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or request.remote
+        or "unknown"
+    )
 
 
 def _rate_ok(store: LRUDict, ip: str, limit: int, window: float = 60.0) -> bool:
@@ -141,6 +143,7 @@ def require_login(handler):
 
 # ---------------- Permisos por guild ----------------
 
+
 def _filter_manage_guilds(guilds: list[dict]) -> list[dict]:
     """Filtra los guilds donde el usuario es owner o tiene MANAGE_GUILD/ADMINISTRATOR."""
     manage = []
@@ -167,11 +170,17 @@ async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
         return cached[1]
     try:
         http = request.app["http"]
-        async with http.get(f"{_DISCORD_API}/users/@me/guilds",
-                            headers={"Authorization": f"Bearer {token}"}) as r:
+        async with http.get(
+            f"{_DISCORD_API}/users/@me/guilds",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as r:
             if r.status != 200:
-                log.warning("GET /users/@me/guilds devolvió %s para user %s "
-                            "(429 = rate limit de Discord en este endpoint)", r.status, user_id)
+                log.warning(
+                    "GET /users/@me/guilds devolvió %s para user %s "
+                    "(429 = rate limit de Discord en este endpoint)",
+                    r.status,
+                    user_id,
+                )
                 if r.status == 429 and cached:
                     # Rate limit transitorio: mejor servir la lista vencida que desloguear.
                     return cached[1]
@@ -185,7 +194,9 @@ async def _fetch_manage_guilds(request: web.Request) -> list[dict] | None:
     return manage
 
 
-async def check_guild_access(request: web.Request, guild_id: int) -> web.Response | None:
+async def check_guild_access(
+    request: web.Request, guild_id: int
+) -> web.Response | None:
     """None si el usuario puede administrar el guild; si no, la respuesta de error."""
     manage = await _fetch_manage_guilds(request)
     if manage is None:
@@ -241,6 +252,7 @@ def _channel_name(guild, channel_id: int | None) -> str | None:
 
 # ---------------- GIF API ----------------
 
+
 async def _gif_add_impl(request: web.Request, guild_id: int) -> web.Response:
     ip = _client_ip(request)
     if not _rate_ok(_rate_post, ip, 5):
@@ -254,7 +266,9 @@ async def _gif_add_impl(request: web.Request, guild_id: int) -> web.Response:
     return web.json_response({"inserted": inserted, "total": total})
 
 
-async def _gif_delete_impl(request: web.Request, guild_id: int, raw_id: str) -> web.Response:
+async def _gif_delete_impl(
+    request: web.Request, guild_id: int, raw_id: str
+) -> web.Response:
     ip = _client_ip(request)
     if not _rate_ok(_rate_delete, ip, 3):
         return web.json_response({"error": "rate limit"}, status=429)
@@ -281,7 +295,9 @@ async def _api_gif_delete(request: web.Request) -> web.Response:
     denied = await check_guild_access(request, PURGATORY_GUILD_ID)
     if denied is not None:
         return denied
-    return await _gif_delete_impl(request, PURGATORY_GUILD_ID, request.match_info.get("id", ""))
+    return await _gif_delete_impl(
+        request, PURGATORY_GUILD_ID, request.match_info.get("id", "")
+    )
 
 
 async def _api_health(request: web.Request) -> web.Response:
@@ -298,10 +314,13 @@ async def _gallery(request: web.Request) -> web.Response:
         if session.get("user_id"):
             raise web.HTTPFound("/servers")
         raise web.HTTPFound("/auth/login")
-    return web.Response(text=GIF_GALLERY_HTML, content_type="text/html", charset="utf-8")
+    return web.Response(
+        text=GIF_GALLERY_HTML, content_type="text/html", charset="utf-8"
+    )
 
 
 # ---------------- Auth OAuth2 ----------------
+
 
 def _avatar_url(user: dict) -> str:
     avatar = user.get("avatar")
@@ -315,13 +334,15 @@ async def _auth_login(request: web.Request) -> web.StreamResponse:
     session = await get_session(request)
     state = secrets.token_urlsafe(24)
     session["oauth_state"] = state
-    params = urlencode({
-        "client_id": DISCORD_CLIENT_ID,
-        "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
-        "response_type": "code",
-        "scope": "identify guilds",
-        "state": state,
-    })
+    params = urlencode(
+        {
+            "client_id": DISCORD_CLIENT_ID,
+            "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
+            "response_type": "code",
+            "scope": "identify guilds",
+            "state": state,
+        }
+    )
     raise web.HTTPFound(f"https://discord.com/oauth2/authorize?{params}")
 
 
@@ -335,27 +356,33 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     try:
         http = request.app["http"]
         # Canje del code por access_token (grant authorization_code).
-        async with http.post(f"{_DISCORD_API}/oauth2/token", data={
-            "client_id": DISCORD_CLIENT_ID,
-            "client_secret": DISCORD_CLIENT_SECRET,
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
-        }) as r:
+        async with http.post(
+            f"{_DISCORD_API}/oauth2/token",
+            data={
+                "client_id": DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"{DASHBOARD_BASE_URL}/auth/callback",
+            },
+        ) as r:
             if r.status != 200:
                 raise web.HTTPFound("/auth/error")
             access = (await r.json()).get("access_token")
 
         # Quién es el usuario.
-        async with http.get(f"{_DISCORD_API}/users/@me",
-                            headers={"Authorization": f"Bearer {access}"}) as r:
+        async with http.get(
+            f"{_DISCORD_API}/users/@me", headers={"Authorization": f"Bearer {access}"}
+        ) as r:
             if r.status != 200:
                 raise web.HTTPFound("/auth/error")
             user = await r.json()
 
         # Guilds del usuario, para verificar que administre alguno donde esté el bot.
-        async with http.get(f"{_DISCORD_API}/users/@me/guilds",
-                            headers={"Authorization": f"Bearer {access}"}) as r:
+        async with http.get(
+            f"{_DISCORD_API}/users/@me/guilds",
+            headers={"Authorization": f"Bearer {access}"},
+        ) as r:
             if r.status != 200:
                 raise web.HTTPFound("/auth/error")
             user_guilds = await r.json()
@@ -367,9 +394,15 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     manage_ids = {int(g["id"]) for g in manage}
     bot_guild_ids = {g.id for g in request.app["bot"].guilds}
     # debug temporal: diagnóstico de no_guilds y de pérdida de sesión post-login.
-    log.info("OAuth callback user=%s: user_guilds=%d, manage_ids=%s, bot_guild_ids=%s, "
-             "intersección=%s", user["id"], len(user_guilds), manage_ids, bot_guild_ids,
-             manage_ids & bot_guild_ids)
+    log.info(
+        "OAuth callback user=%s: user_guilds=%d, manage_ids=%s, bot_guild_ids=%s, "
+        "intersección=%s",
+        user["id"],
+        len(user_guilds),
+        manage_ids,
+        bot_guild_ids,
+        manage_ids & bot_guild_ids,
+    )
     # Basta con administrar algún servidor: si el bot no está en ninguno,
     # /servers muestra la sección "Invitar Purgito" para añadirlo.
     if not manage_ids:
@@ -418,10 +451,14 @@ async def _auth_error(request: web.Request) -> web.Response:
 
 _STATIC_DIR = Path(__file__).parent / "static"
 try:
-    _STATIC_V = str(int(max(
-        (_STATIC_DIR / "panel.js").stat().st_mtime,
-        (_STATIC_DIR / "panel.css").stat().st_mtime,
-    )))
+    _STATIC_V = str(
+        int(
+            max(
+                (_STATIC_DIR / "panel.js").stat().st_mtime,
+                (_STATIC_DIR / "panel.css").stat().st_mtime,
+            )
+        )
+    )
 except OSError:
     _STATIC_V = "1"
 
@@ -429,9 +466,10 @@ except OSError:
 def _versioned_static(html_text: str) -> str:
     """Cloudflare cachea /static/*.js|css por 4 h; versionar la URL con el mtime
     hace que cada deploy sirva assets frescos sin purgar el cache a mano."""
-    return (html_text
-            .replace("/static/panel.css", f"/static/panel.css?v={_STATIC_V}")
-            .replace("/static/panel.js", f"/static/panel.js?v={_STATIC_V}"))
+    return html_text.replace(
+        "/static/panel.css", f"/static/panel.css?v={_STATIC_V}"
+    ).replace("/static/panel.js", f"/static/panel.js?v={_STATIC_V}")
+
 
 async def _dashboard(request: web.Request) -> web.StreamResponse:
     # Mantiene bookmarks viejos funcionando.
@@ -440,9 +478,11 @@ async def _dashboard(request: web.Request) -> web.StreamResponse:
 
 async def _servers_page(request: web.Request) -> web.Response:
     session = await get_session(request)
-    body = _versioned_static(SELECTOR_HTML
-            .replace("{{USERNAME}}", html.escape(str(session.get("username", ""))))
-            .replace("{{AVATAR_URL}}", html.escape(str(session.get("avatar_url", "")))))
+    body = _versioned_static(
+        SELECTOR_HTML.replace(
+            "{{USERNAME}}", html.escape(str(session.get("username", "")))
+        ).replace("{{AVATAR_URL}}", html.escape(str(session.get("avatar_url", ""))))
+    )
     return web.Response(text=body, content_type="text/html", charset="utf-8")
 
 
@@ -455,6 +495,7 @@ async def _server_page(request: web.Request) -> web.Response:
 
 
 # ---------------- API: guilds del usuario ----------------
+
 
 async def _api_me_guilds(request: web.Request) -> web.Response:
     session = await get_session(request)
@@ -469,33 +510,44 @@ async def _api_me_guilds(request: web.Request) -> web.Response:
     for g in manage:
         gid = int(g["id"])
         icon = g.get("icon")
-        icon_url = f"https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=128" if icon else None
+        icon_url = (
+            f"https://cdn.discordapp.com/icons/{gid}/{icon}.png?size=128"
+            if icon
+            else None
+        )
         if gid in bot_guild_ids:
             bot_guild = bot.get_guild(gid)
-            configured.append({
-                "id": str(gid),
-                "name": g.get("name", ""),
-                "icon_url": icon_url,
-                "member_count": getattr(bot_guild, "member_count", None),
-                "is_premium": is_premium_guild(gid),
-            })
+            configured.append(
+                {
+                    "id": str(gid),
+                    "name": g.get("name", ""),
+                    "icon_url": icon_url,
+                    "member_count": getattr(bot_guild, "member_count", None),
+                    "is_premium": is_premium_guild(gid),
+                }
+            )
         else:
-            available.append({
-                "id": str(gid),
-                "name": g.get("name", ""),
-                "icon_url": icon_url,
-                "invite_url": get_invite_url(str(gid)),
-            })
+            available.append(
+                {
+                    "id": str(gid),
+                    "name": g.get("name", ""),
+                    "icon_url": icon_url,
+                    "invite_url": get_invite_url(str(gid)),
+                }
+            )
     return web.json_response({"configured": configured, "available": available})
 
 
 # ---------------- API: canales y roles ----------------
 
+
 @guild_api
 async def _api_channels(request: web.Request, guild_id: int) -> web.Response:
     guild = _bot_guild(request, guild_id)
     if guild is None:
-        return web.json_response({"error": "el bot no está en ese servidor"}, status=404)
+        return web.json_response(
+            {"error": "el bot no está en ese servidor"}, status=404
+        )
     channels = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
     return web.json_response({"channels": channels})
 
@@ -504,24 +556,30 @@ async def _api_channels(request: web.Request, guild_id: int) -> web.Response:
 async def _api_roles(request: web.Request, guild_id: int) -> web.Response:
     guild = _bot_guild(request, guild_id)
     if guild is None:
-        return web.json_response({"error": "el bot no está en ese servidor"}, status=404)
+        return web.json_response(
+            {"error": "el bot no está en ese servidor"}, status=404
+        )
     roles = [
         {"id": str(r.id), "name": r.name, "color": f"#{r.colour.value:06x}"}
-        for r in guild.roles if not r.is_default()
+        for r in guild.roles
+        if not r.is_default()
     ]
     return web.json_response({"roles": roles})
 
 
 # ---------------- API: chat ----------------
 
+
 @guild_api
 async def _api_chat_get(request: web.Request, guild_id: int) -> web.Response:
     settings = await get_chat_settings(guild_id)
     channel_id = settings["channel_id"]
-    return web.json_response({
-        "enabled": settings["enabled"],
-        "channel_id": str(channel_id) if channel_id else None,
-    })
+    return web.json_response(
+        {
+            "enabled": settings["enabled"],
+            "channel_id": str(channel_id) if channel_id else None,
+        }
+    )
 
 
 @guild_api
@@ -540,11 +598,14 @@ async def _api_chat_put(request: web.Request, guild_id: int) -> web.Response:
 
 # ---------------- API: corpus (canales ignorados) ----------------
 
+
 @guild_api
 async def _api_corpus_get(request: web.Request, guild_id: int) -> web.Response:
     guild = _bot_guild(request, guild_id)
     channel_ids = await list_ignored_channels(guild_id)
-    channels = [{"id": str(cid), "name": _channel_name(guild, cid)} for cid in channel_ids]
+    channels = [
+        {"id": str(cid), "name": _channel_name(guild, cid)} for cid in channel_ids
+    ]
     return web.json_response({"channels": channels})
 
 
@@ -568,6 +629,7 @@ async def _api_corpus_delete(request: web.Request, guild_id: int) -> web.Respons
 
 
 # ---------------- API: reacciones ----------------
+
 
 @guild_api
 async def _api_reacciones_get(request: web.Request, guild_id: int) -> web.Response:
@@ -596,12 +658,18 @@ async def _api_reacciones_delete(request: web.Request, guild_id: int) -> web.Res
 
 # ---------------- API: frases ----------------
 
+
 @guild_api
 async def _api_frases_get(request: web.Request, guild_id: int) -> web.Response:
     frases = await list_frases_especiales(guild_id)
-    return web.json_response({"frases": [
-        {"id": f["id"], "frase": f["frase"], "user_name": f["user_name"]} for f in frases
-    ]})
+    return web.json_response(
+        {
+            "frases": [
+                {"id": f["id"], "frase": f["frase"], "user_name": f["user_name"]}
+                for f in frases
+            ]
+        }
+    )
 
 
 @guild_api
@@ -628,6 +696,7 @@ async def _api_frases_delete(request: web.Request, guild_id: int) -> web.Respons
 
 # ---------------- API: YouTube ----------------
 
+
 @guild_api
 async def _api_youtube_get(request: web.Request, guild_id: int) -> web.Response:
     guild = _bot_guild(request, guild_id)
@@ -636,14 +705,16 @@ async def _api_youtube_get(request: web.Request, guild_id: int) -> web.Response:
     for s in subs:
         role_id = s["mention_role_id"]
         role = guild.get_role(role_id) if guild and role_id else None
-        out.append({
-            "youtube_channel_id": s["youtube_channel_id"],
-            "youtube_channel_name": s["youtube_channel_name"],
-            "discord_channel_id": str(s["discord_channel_id"]),
-            "discord_channel_name": _channel_name(guild, s["discord_channel_id"]),
-            "mention_role_id": str(role_id) if role_id else None,
-            "mention_role_name": getattr(role, "name", None),
-        })
+        out.append(
+            {
+                "youtube_channel_id": s["youtube_channel_id"],
+                "youtube_channel_name": s["youtube_channel_name"],
+                "discord_channel_id": str(s["discord_channel_id"]),
+                "discord_channel_name": _channel_name(guild, s["discord_channel_id"]),
+                "mention_role_id": str(role_id) if role_id else None,
+                "mention_role_name": getattr(role, "name", None),
+            }
+        )
     return web.json_response({"subs": out})
 
 
@@ -661,7 +732,9 @@ async def _api_youtube_post(request: web.Request, guild_id: int) -> web.Response
     # el primer poll anunciaría como "nuevo" un video ya existente.
     video = await get_latest_video(yt_id)
     if video is None:
-        return web.json_response({"error": "canal de YouTube inválido o inaccesible"}, status=400)
+        return web.json_response(
+            {"error": "canal de YouTube inválido o inaccesible"}, status=400
+        )
     added = await add_youtube_sub(guild_id, 0, yt_id, yt_name, discord_channel_id)
     if added:
         await update_last_video_id(guild_id, yt_id, video["id"])
@@ -692,9 +765,12 @@ async def _api_youtube_mention_put(request: web.Request, guild_id: int) -> web.R
 
 # ---------------- API: memes (premium) ----------------
 
+
 def _premium_gate(guild_id: int) -> web.Response | None:
     if not is_premium_guild(guild_id):
-        return web.json_response({"error": "feature premium", "premium": True}, status=403)
+        return web.json_response(
+            {"error": "feature premium", "premium": True}, status=403
+        )
     return None
 
 
@@ -705,14 +781,18 @@ async def _api_memes_get(request: web.Request, guild_id: int) -> web.Response:
         return gate
     guild = _bot_guild(request, guild_id)
     schedules = await list_meme_schedules(guild_id)
-    return web.json_response({"schedules": [
+    return web.json_response(
         {
-            "channel_id": str(s["channel_id"]),
-            "channel_name": _channel_name(guild, s["channel_id"]),
-            "interval_hours": s["interval_minutes"] // 60,
+            "schedules": [
+                {
+                    "channel_id": str(s["channel_id"]),
+                    "channel_name": _channel_name(guild, s["channel_id"]),
+                    "interval_hours": s["interval_minutes"] // 60,
+                }
+                for s in schedules
+            ]
         }
-        for s in schedules
-    ]})
+    )
 
 
 @guild_api
@@ -724,7 +804,9 @@ async def _api_memes_post(request: web.Request, guild_id: int) -> web.Response:
     channel_id = _to_int(data.get("channel_id")) if data else None
     interval_hours = _to_int(data.get("interval_hours")) if data else None
     if channel_id is None or interval_hours is None or not (2 <= interval_hours <= 24):
-        return web.json_response({"error": "channel_id o interval_hours (2-24) inválidos"}, status=400)
+        return web.json_response(
+            {"error": "channel_id o interval_hours (2-24) inválidos"}, status=400
+        )
     added = await add_meme_schedule(guild_id, channel_id, interval_hours * 60)
     return web.json_response({"added": added})
 
@@ -743,6 +825,7 @@ async def _api_memes_delete(request: web.Request, guild_id: int) -> web.Response
 
 # ---------------- API: gifs por guild ----------------
 
+
 @guild_api
 async def _api_server_gifs_get(request: web.Request, guild_id: int) -> web.Response:
     gifs = await list_gif_urls(guild_id)
@@ -756,12 +839,17 @@ async def _api_server_gifs_post(request: web.Request, guild_id: int) -> web.Resp
 
 @guild_api
 async def _api_server_gifs_delete(request: web.Request, guild_id: int) -> web.Response:
-    return await _gif_delete_impl(request, guild_id, request.match_info.get("gif_id", ""))
+    return await _gif_delete_impl(
+        request, guild_id, request.match_info.get("gif_id", "")
+    )
 
 
 # ---------------- Server ----------------
 
-async def _log_auth_set_cookie(request: web.Request, response: web.StreamResponse) -> None:
+
+async def _log_auth_set_cookie(
+    request: web.Request, response: web.StreamResponse
+) -> None:
     # debug temporal: verifica que el Set-Cookie de sesión salga en las respuestas
     # de /auth/* (se loggean atributos, nunca el valor cifrado).
     if not request.path.startswith("/auth/"):
@@ -773,16 +861,26 @@ async def _log_auth_set_cookie(request: web.Request, response: web.StreamRespons
     for c in cookies:
         name = c.split("=", 1)[0]
         attrs = c.partition(";")[2].strip()
-        log.info("Respuesta %s %s Set-Cookie: %s=<cifrado>; %s",
-                 response.status, request.path, name, attrs)
+        log.info(
+            "Respuesta %s %s Set-Cookie: %s=<cifrado>; %s",
+            response.status,
+            request.path,
+            name,
+            attrs,
+        )
 
 
 def _new_session_storage() -> EncryptedCookieStorage:
     # Derivamos 32 bytes exactos desde SESSION_SECRET (cualquier longitud) para Fernet.
     key = hashlib.sha256(SESSION_SECRET.encode()).digest()
-    return EncryptedCookieStorage(key, cookie_name="PURGITO_SESSION",
-                                  max_age=7 * 24 * 3600, httponly=True,
-                                  samesite="Lax", secure=True)
+    return EncryptedCookieStorage(
+        key,
+        cookie_name="PURGITO_SESSION",
+        max_age=7 * 24 * 3600,
+        httponly=True,
+        samesite="Lax",
+        secure=True,
+    )
 
 
 async def start_web_server(bot: commands.Bot) -> None:
@@ -823,23 +921,38 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.router.add_put(f"{base}/settings/chat", _api_chat_put)
         app.router.add_get(f"{base}/settings/corpus", _api_corpus_get)
         app.router.add_post(f"{base}/settings/corpus", _api_corpus_post)
-        app.router.add_delete(f"{base}/settings/corpus/{{channel_id}}", _api_corpus_delete)
+        app.router.add_delete(
+            f"{base}/settings/corpus/{{channel_id}}", _api_corpus_delete
+        )
         app.router.add_get(f"{base}/settings/reacciones", _api_reacciones_get)
         app.router.add_post(f"{base}/settings/reacciones", _api_reacciones_post)
-        app.router.add_delete(f"{base}/settings/reacciones/{{reaction_id}}", _api_reacciones_delete)
+        app.router.add_delete(
+            f"{base}/settings/reacciones/{{reaction_id}}", _api_reacciones_delete
+        )
         app.router.add_get(f"{base}/settings/frases", _api_frases_get)
         app.router.add_post(f"{base}/settings/frases", _api_frases_post)
-        app.router.add_delete(f"{base}/settings/frases/{{frase_id}}", _api_frases_delete)
+        app.router.add_delete(
+            f"{base}/settings/frases/{{frase_id}}", _api_frases_delete
+        )
         app.router.add_get(f"{base}/settings/youtube", _api_youtube_get)
         app.router.add_post(f"{base}/settings/youtube", _api_youtube_post)
-        app.router.add_delete(f"{base}/settings/youtube/{{youtube_channel_id}}", _api_youtube_delete)
-        app.router.add_put(f"{base}/settings/youtube/{{youtube_channel_id}}/mention", _api_youtube_mention_put)
+        app.router.add_delete(
+            f"{base}/settings/youtube/{{youtube_channel_id}}", _api_youtube_delete
+        )
+        app.router.add_put(
+            f"{base}/settings/youtube/{{youtube_channel_id}}/mention",
+            _api_youtube_mention_put,
+        )
         app.router.add_get(f"{base}/settings/memes", _api_memes_get)
         app.router.add_post(f"{base}/settings/memes", _api_memes_post)
-        app.router.add_delete(f"{base}/settings/memes/{{channel_id}}", _api_memes_delete)
+        app.router.add_delete(
+            f"{base}/settings/memes/{{channel_id}}", _api_memes_delete
+        )
         app.router.add_get(f"{base}/settings/gifs", _api_server_gifs_get)
         app.router.add_post(f"{base}/settings/gifs", _api_server_gifs_post)
-        app.router.add_delete(f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete)
+        app.router.add_delete(
+            f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete
+        )
         log.info("Dashboard OAuth2 habilitado")
     else:
         # Sin dashboard no hay login posible, así que la escritura queda

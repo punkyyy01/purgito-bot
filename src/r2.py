@@ -97,6 +97,7 @@ def upload_gif_sync(url: str, guild_id: int) -> str | None:
             Key=key,
             Body=data,
             ContentType="image/gif",
+            CacheControl="public, max-age=31536000, immutable",
         )
         return f"{public_url().rstrip('/')}/{key}"
     except Exception:
@@ -122,11 +123,27 @@ def upload_image_sync(url: str, guild_id: int, ext: str) -> str | None:
             Key=key,
             Body=data,
             ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
         )
         return f"{public_url().rstrip('/')}/{key}"
     except Exception:
         log.exception("Error subiendo imagen a R2: %s", url)
         return None
+
+
+def is_url_alive(url: str, timeout: float = 4.0) -> bool:
+    """HEAD rápido (con fallback a GET) para chequear un GIF antes de mandarlo a Discord."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
+        resp = requests.head(
+            url, headers=headers, timeout=timeout, allow_redirects=True
+        )
+        if resp.status_code == 405:
+            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            resp.close()
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 
 async def delete_url(url: str) -> None:
@@ -137,7 +154,7 @@ async def delete_url(url: str) -> None:
     client = get_client()
     if client is None:
         return
-    key = url[len(pub.rstrip("/")) + 1:]
+    key = url[len(pub.rstrip("/")) + 1 :]
     try:
         await asyncio.to_thread(client.delete_object, Bucket=_bucket(), Key=key)
     except Exception:

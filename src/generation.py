@@ -28,7 +28,16 @@ log = logging.getLogger(__name__)
 
 # Conectores comunes para recortar finales de frases incompletas.
 _CONECTORES_FINALES = [
-    " y", " o", " con", " pero", " de", " para", " a", " que", " entonces", " como"
+    " y",
+    " o",
+    " con",
+    " pero",
+    " de",
+    " para",
+    " a",
+    " que",
+    " entonces",
+    " como",
 ]
 
 _markov_cache: LRUDict = LRUDict(64)
@@ -43,7 +52,9 @@ _special_phrase_cooldowns: LRUDict = LRUDict(256)
 _EMPTY_REPLY_COOLDOWN = 15 * 60
 _empty_reply_cooldowns: LRUDict = LRUDict(256)
 
-_EMOJI_RE = regex.compile(r'[\p{Extended_Pictographic}\p{Emoji_Component}]+', regex.UNICODE)
+_EMOJI_RE = regex.compile(
+    r"[\p{Extended_Pictographic}\p{Emoji_Component}]+", regex.UNICODE
+)
 
 # Referencias a tasks fire-and-forget: sin esto el GC puede cancelar un trim en curso.
 _bg_tasks: set = set()
@@ -54,10 +65,11 @@ def _spawn(coro) -> None:
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
 
-_ANSI_ESCAPE_RE = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
-_ANSI_BRACKET_RE = re.compile(r'\]\d*;[^\]]*')
-_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
-_DISCORD_MENTIONS_RE = re.compile(r'<a?:\w+:\d+>|<@!?\d+>|<#\d+>|<@&\d+>')
+
+_ANSI_ESCAPE_RE = re.compile(r"(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]")
+_ANSI_BRACKET_RE = re.compile(r"\]\d*;[^\]]*")
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_DISCORD_MENTIONS_RE = re.compile(r"<a?:\w+:\d+>|<@!?\d+>|<#\d+>|<@&\d+>")
 
 
 # Postproceso para recortar muletillas y finales raros.
@@ -76,7 +88,7 @@ def post_process_reply(text: str) -> str:
         changed = False
         for con in _CONECTORES_FINALES:
             if text.endswith(con):
-                text = text[:-len(con)].strip()
+                text = text[: -len(con)].strip()
                 changed = True
 
     if text.endswith("."):
@@ -101,7 +113,7 @@ def clean_for_corpus(text: str) -> str | None:
     # Eliminar URLs y menciones Discord
     t = _URL_RE.sub(" ", t)
     t = _DISCORD_MENTIONS_RE.sub(" ", t)
-    t = re.sub(r'\b\d{5,}\b', '', t)
+    t = re.sub(r"\b\d{5,}\b", "", t)
 
     # Eliminar líneas que sean solo números/símbolos/caracteres especiales
     kept_lines: list[str] = []
@@ -160,7 +172,12 @@ def note_message_for_auto_generate(guild_id: int, channel_id: int) -> bool:
 def reset_guild_caches(guild_id: int) -> None:
     """Limpia todos los caches en memoria de un guild (tras corpus_wipe)."""
     _markov_cache.pop(guild_id, None)
-    for cache in (_corpus_insert_counter, _message_counter, _user_corpus_insert_counter, _user_markov_cache):
+    for cache in (
+        _corpus_insert_counter,
+        _message_counter,
+        _user_corpus_insert_counter,
+        _user_markov_cache,
+    ):
         for key in [k for k in cache.keys() if k[0] == guild_id]:
             cache.pop(key, None)
 
@@ -212,7 +229,9 @@ async def generate_markov_for_user(guild_id: int, author_id: int) -> str | None:
     key = (guild_id, author_id)
     model = _user_markov_cache.get(key)
     if model is None:
-        corpus = await get_user_messages(guild_id, author_id, limit=config.USER_MARKOV_TRAINING_MESSAGES)
+        corpus = await get_user_messages(
+            guild_id, author_id, limit=config.USER_MARKOV_TRAINING_MESSAGES
+        )
         if len(corpus) < 30:
             return None
 
@@ -262,7 +281,10 @@ async def generate_response(guild_id: int) -> tuple[str | None, bool]:
     """Decide entre frase especial o Markov. Retorna (texto, es_especial).
     es_especial=True indica que el texto no debe pasar por post_process_reply."""
     now = time.monotonic()
-    cooldown_ok = now - _special_phrase_cooldowns.get(guild_id, 0.0) >= config.SPECIAL_PHRASE_COOLDOWN
+    cooldown_ok = (
+        now - _special_phrase_cooldowns.get(guild_id, 0.0)
+        >= config.SPECIAL_PHRASE_COOLDOWN
+    )
     if cooldown_ok and random.random() < config.SPECIAL_PHRASE_PROBABILITY:
         phrase = await get_random_frase_especial(guild_id)
         if phrase:

@@ -43,9 +43,13 @@ def chunk_message(text: str, max_length: int = 1900) -> list[str]:
             chunks.append(text)
             break
         chunk = text[:max_length]
-        last_newline = chunk.rfind('\n')
-        last_space = chunk.rfind(' ')
-        cut_index = last_newline if last_newline > 0 else (last_space if last_space > 0 else max_length)
+        last_newline = chunk.rfind("\n")
+        last_space = chunk.rfind(" ")
+        cut_index = (
+            last_newline
+            if last_newline > 0
+            else (last_space if last_space > 0 else max_length)
+        )
         chunks.append(text[:cut_index].strip())
         text = text[cut_index:].strip()
     return chunks

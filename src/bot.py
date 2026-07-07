@@ -23,7 +23,9 @@ _LOG_PATH = os.path.join(_BASE_DIR, "data", "bot.log")
 os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
 
 _fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
-_fh = RotatingFileHandler(_LOG_PATH, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+_fh = RotatingFileHandler(
+    _LOG_PATH, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+)
 _fh.setFormatter(_fmt)
 _sh = logging.StreamHandler()
 _sh.setFormatter(_fmt)
@@ -34,7 +36,7 @@ logging.getLogger("discord.http").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 EXTENSIONS = [
-    "cogs.premium",   # primero: expone is_premium_guild al resto
+    "cogs.premium",  # primero: expone is_premium_guild al resto
     "cogs.chat",
     "cogs.gifs",
     "cogs.memes",
@@ -94,7 +96,11 @@ async def on_ready():
                 guild_obj = discord.Object(id=int(config.GUILD_ID_ENV))
                 bot.tree.copy_global_to(guild=guild_obj)
                 guild_synced = await bot.tree.sync(guild=guild_obj)
-                log.info("Sync instantáneo al servidor %s: %s", config.GUILD_ID_ENV, [c.name for c in guild_synced])
+                log.info(
+                    "Sync instantáneo al servidor %s: %s",
+                    config.GUILD_ID_ENV,
+                    [c.name for c in guild_synced],
+                )
 
             _commands_synced = True
         except Exception:
@@ -112,7 +118,9 @@ async def on_ready():
 
 if __name__ == "__main__":
     if not config.TOKEN:
-        log.critical("Falta DISCORD_TOKEN en .env. Copia .env.example a .env y pon tu token.")
+        log.critical(
+            "Falta DISCORD_TOKEN en .env. Copia .env.example a .env y pon tu token."
+        )
         sys.exit(1)
     try:
         bot.run(config.TOKEN)

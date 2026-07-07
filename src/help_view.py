@@ -59,7 +59,7 @@ CATEGORIES = {
         "intro": "⭐ **Función premium** — no disponible en todos los servidores.",
         "commands": [
             ("/momo · /meme", "genera un meme del pool de imágenes"),
-            ('Reply a una imagen + “generar”', "meme de esa imagen"),
+            ("Reply a una imagen + “generar”", "meme de esa imagen"),
             ("Reacción 🎯 a una imagen", "la agrega al pool de memes"),
             ("/settings → Memes", "memes automáticos por canal"),
         ],
@@ -70,7 +70,10 @@ CATEGORIES = {
         "title": "📺 YouTube",
         "row": 1,
         "commands": [
-            ("/settings → YouTube", "suscribe canales, elige dónde anunciar y qué rol mencionar"),
+            (
+                "/settings → YouTube",
+                "suscribe canales, elige dónde anunciar y qué rol mencionar",
+            ),
         ],
     },
     "admin": {
@@ -83,7 +86,10 @@ CATEGORIES = {
             ("/setup", "guía de configuración inicial"),
             ("/refeed", "importa mensajes del canal al corpus"),
             ("/refeed_all", "importa todos los canales"),
-            ("/settings → Corpus / Reacciones", "canales ignorados, wipe del corpus y pool de emojis"),
+            (
+                "/settings → Corpus / Reacciones",
+                "canales ignorados, wipe del corpus y pool de emojis",
+            ),
             ("/gif_add <url>", "agrega un GIF a la colección ⭐"),
             ("!ping", "verifica que el bot está online"),
         ],
@@ -98,8 +104,14 @@ def build_intro_embed(guild_name: str) -> discord.Embed:
         color=PURGITO_COLOR,
     )
     # Field en vez de footer: los footers de Discord no renderizan links clickeables.
-    embed.add_field(name="⚙️ Panel web", value=f"Configura Purgito desde el navegador: {PANEL_URL}", inline=False)
-    embed.set_footer(text=f"Comandos disponibles en {guild_name} · usa los botones de abajo")
+    embed.add_field(
+        name="⚙️ Panel web",
+        value=f"Configura Purgito desde el navegador: {PANEL_URL}",
+        inline=False,
+    )
+    embed.set_footer(
+        text=f"Comandos disponibles en {guild_name} · usa los botones de abajo"
+    )
     return embed
 
 
@@ -111,7 +123,9 @@ def build_category_embed(key: str, guild_name: str) -> discord.Embed:
         lines.append("")
     for cmd, desc in cat["commands"]:
         lines.append(f"`{cmd}` — {desc}")
-    embed = discord.Embed(title=cat["title"], description="\n".join(lines), color=PURGITO_COLOR)
+    embed = discord.Embed(
+        title=cat["title"], description="\n".join(lines), color=PURGITO_COLOR
+    )
     embed.set_footer(text=f"{guild_name} · /help para volver al inicio")
     return embed
 
@@ -143,12 +157,14 @@ class HelpView(discord.ui.View):
         async def callback(interaction: discord.Interaction):
             embed = build_intro_embed(self.guild_name)
             await interaction.response.edit_message(embed=embed, view=self)
+
         return callback
 
     def _make_category_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             embed = build_category_embed(key, self.guild_name)
             await interaction.response.edit_message(embed=embed, view=self)
+
         return callback
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

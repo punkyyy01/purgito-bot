@@ -165,7 +165,9 @@ async def init_db():
     # Crear tablas
     await _db.executescript(SCHEMA)
     try:
-        await _db.execute("ALTER TABLE youtube_subscriptions ADD COLUMN mention_role_id INTEGER")
+        await _db.execute(
+            "ALTER TABLE youtube_subscriptions ADD COLUMN mention_role_id INTEGER"
+        )
         await _db.commit()
     except Exception:
         log.debug("Columna mention_role_id ya existe en youtube_subscriptions")
@@ -174,6 +176,13 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna media_url ya existe en corpus_gifs")
+    try:
+        await _db.execute(
+            "ALTER TABLE corpus_gifs ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0"
+        )
+        await _db.commit()
+    except Exception:
+        log.debug("Columna fail_count ya existe en corpus_gifs")
     try:
         await _db.execute("ALTER TABLE settings ADD COLUMN locale TEXT")
         await _db.commit()
@@ -329,7 +338,9 @@ async def get_corpus_messages_filtered(
         "    ORDER BY RANDOM() LIMIT ?"
         ")"
     )
-    async with db.execute(query, (guild_id, min_words - 1, guild_id, min_words - 1, limit)) as cursor:
+    async with db.execute(
+        query, (guild_id, min_words - 1, guild_id, min_words - 1, limit)
+    ) as cursor:
         rows = await cursor.fetchall()
     return [r[0] for r in rows]
 
@@ -351,7 +362,8 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
     evicted_url: str | None = None
     async with _db_lock:
         async with db.execute(
-            "SELECT 1 FROM corpus_gifs WHERE guild_id=? AND url=? LIMIT 1", (guild_id, u)
+            "SELECT 1 FROM corpus_gifs WHERE guild_id=? AND url=? LIMIT 1",
+            (guild_id, u),
         ) as cur:
             already_exists = await cur.fetchone()
         if not already_exists:
@@ -379,14 +391,41 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
     return inserted
 
 
-async def get_random_gif(guild_id: int) -> str | None:
+async def get_random_gif_candidates(guild_id: int, limit: int = 3) -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT url FROM corpus_gifs WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
-        (guild_id,),
+        "SELECT id, url, media_url FROM corpus_gifs WHERE guild_id=? ORDER BY RANDOM() LIMIT ?",
+        (guild_id, limit),
     ) as cursor:
-        row = await cursor.fetchone()
-    return row[0] if row else None
+        rows = await cursor.fetchall()
+    return [{"id": r[0], "url": r[1], "media_url": r[2]} for r in rows]
+
+
+async def mark_gif_check(gif_id: int, alive: bool, max_fails: int = 3) -> bool:
+    """Actualiza el contador de fallos. Retorna True si se borró por superar max_fails.
+
+    No borra el objeto de R2: solo deja de sugerir el GIF desde la DB.
+    """
+    db = await get_db()
+    async with _db_lock:
+        if alive:
+            await db.execute(
+                "UPDATE corpus_gifs SET fail_count=0 WHERE id=?", (gif_id,)
+            )
+            await db.commit()
+            return False
+        await db.execute(
+            "UPDATE corpus_gifs SET fail_count=fail_count+1 WHERE id=?", (gif_id,)
+        )
+        async with db.execute(
+            "SELECT fail_count FROM corpus_gifs WHERE id=?", (gif_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        borrado = bool(row and row[0] >= max_fails)
+        if borrado:
+            await db.execute("DELETE FROM corpus_gifs WHERE id=?", (gif_id,))
+        await db.commit()
+        return borrado
 
 
 async def count_gif_urls(guild_id: int) -> int:
@@ -406,7 +445,9 @@ async def list_gif_urls(guild_id: int) -> list[dict]:
         (guild_id,),
     ) as cursor:
         rows = await cursor.fetchall()
-    return [{"id": r[0], "url": r[1], "created_at": r[2], "media_url": r[3]} for r in rows]
+    return [
+        {"id": r[0], "url": r[1], "created_at": r[2], "media_url": r[3]} for r in rows
+    ]
 
 
 async def update_gif_media_url(gif_id: int, media_url: str) -> None:
@@ -419,12 +460,17 @@ async def update_gif_media_url(gif_id: int, media_url: str) -> None:
         await db.commit()
 
 
-async def get_unresolved_gifs(guild_id: int, limit: int = 30) -> list[dict]:
+async def get_unresolved_gifs(
+    guild_id: int | None = None, limit: int = 30
+) -> list[dict]:
     db = await get_db()
-    async with db.execute(
-        "SELECT id, url FROM corpus_gifs WHERE guild_id=? AND media_url IS NULL ORDER BY id LIMIT ?",
-        (guild_id, limit),
-    ) as cursor:
+    if guild_id is None:
+        query = "SELECT id, url FROM corpus_gifs WHERE media_url IS NULL ORDER BY id LIMIT ?"
+        params: tuple = (limit,)
+    else:
+        query = "SELECT id, url FROM corpus_gifs WHERE guild_id=? AND media_url IS NULL ORDER BY id LIMIT ?"
+        params = (guild_id, limit)
+    async with db.execute(query, params) as cursor:
         rows = await cursor.fetchall()
     return [{"id": r[0], "url": r[1]} for r in rows]
 
@@ -454,12 +500,13 @@ async def delete_gif_url_by_id(guild_id: int, gif_id: int) -> bool:
             try:
                 import boto3
                 from botocore.config import Config as _BotoConfig
+
                 _ep = os.getenv("R2_ENDPOINT_URL", "").strip()
                 _kid = os.getenv("R2_ACCESS_KEY_ID", "").strip()
                 _sec = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
                 _bkt = os.getenv("R2_BUCKET_NAME", "").strip()
                 if _ep and _kid and _sec and _bkt:
-                    _key = url[len(r2_public_url.rstrip("/")) + 1:]
+                    _key = url[len(r2_public_url.rstrip("/")) + 1 :]
 
                     def _r2_del():
                         c = boto3.client(
@@ -493,7 +540,14 @@ async def add_youtube_sub(
             "INSERT OR IGNORE INTO youtube_subscriptions "
             "(guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id, mention_role_id) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (guild_id, channel_id, youtube_channel_id, youtube_channel_name, discord_channel_id, mention_role_id),
+            (
+                guild_id,
+                channel_id,
+                youtube_channel_id,
+                youtube_channel_name,
+                discord_channel_id,
+                mention_role_id,
+            ),
         )
         inserted = _was_inserted(cursor)
         await db.commit()
@@ -557,7 +611,9 @@ async def get_all_youtube_subs() -> list[dict]:
     ]
 
 
-async def update_last_video_id(guild_id: int, youtube_channel_id: str, video_id: str) -> None:
+async def update_last_video_id(
+    guild_id: int, youtube_channel_id: str, video_id: str
+) -> None:
     db = await get_db()
     async with _db_lock:
         await db.execute(
@@ -567,7 +623,9 @@ async def update_last_video_id(guild_id: int, youtube_channel_id: str, video_id:
         await db.commit()
 
 
-async def set_youtube_mention_role(guild_id: int, youtube_channel_id: str, role_id: int | None) -> bool:
+async def set_youtube_mention_role(
+    guild_id: int, youtube_channel_id: str, role_id: int | None
+) -> bool:
     db = await get_db()
     async with _db_lock:
         cursor = await db.execute(
@@ -579,7 +637,13 @@ async def set_youtube_mention_role(guild_id: int, youtube_channel_id: str, role_
     return updated
 
 
-async def save_user_message(guild_id: int, author_id: int, author_name: str, content: str, message_id: int | None = None) -> bool:
+async def save_user_message(
+    guild_id: int,
+    author_id: int,
+    author_name: str,
+    content: str,
+    message_id: int | None = None,
+) -> bool:
     text = (content or "").strip()
     if not text:
         return False
@@ -595,7 +659,9 @@ async def save_user_message(guild_id: int, author_id: int, author_name: str, con
     return inserted
 
 
-async def get_user_messages(guild_id: int, author_id: int, limit: int | None = None) -> list[str]:
+async def get_user_messages(
+    guild_id: int, author_id: int, limit: int | None = None
+) -> list[str]:
     db = await get_db()
     if limit is None:
         query = "SELECT content FROM user_corpus WHERE guild_id=? AND author_id=? ORDER BY RANDOM()"
@@ -667,7 +733,9 @@ async def is_channel_ignored(guild_id: int, channel_id: int) -> bool:
     return row is not None
 
 
-async def add_meme_schedule(guild_id: int, channel_id: int, interval_minutes: int) -> bool:
+async def add_meme_schedule(
+    guild_id: int, channel_id: int, interval_minutes: int
+) -> bool:
     db = await get_db()
     async with _db_lock:
         cursor = await db.execute(
@@ -713,8 +781,7 @@ async def get_due_meme_schedules() -> list[dict]:
     ) as cursor:
         rows = await cursor.fetchall()
     return [
-        {"guild_id": r[0], "channel_id": r[1], "interval_minutes": r[2]}
-        for r in rows
+        {"guild_id": r[0], "channel_id": r[1], "interval_minutes": r[2]} for r in rows
     ]
 
 
@@ -737,7 +804,8 @@ async def save_image_url(guild_id: int, url: str) -> bool:
     evicted_url: str | None = None
     async with _db_lock:
         async with db.execute(
-            "SELECT 1 FROM corpus_images WHERE guild_id=? AND url=? LIMIT 1", (guild_id, u)
+            "SELECT 1 FROM corpus_images WHERE guild_id=? AND url=? LIMIT 1",
+            (guild_id, u),
         ) as cur:
             already_exists = await cur.fetchone()
         if not already_exists:
@@ -752,7 +820,9 @@ async def save_image_url(guild_id: int, url: str) -> bool:
                 ) as cur:
                     oldest = await cur.fetchone()
                 if oldest:
-                    await db.execute("DELETE FROM corpus_images WHERE id=?", (oldest[0],))
+                    await db.execute(
+                        "DELETE FROM corpus_images WHERE id=?", (oldest[0],)
+                    )
                     evicted_url = oldest[1]
         cursor = await db.execute(
             "INSERT OR IGNORE INTO corpus_images (guild_id, url) VALUES (?, ?)",
@@ -811,15 +881,16 @@ async def get_random_image_url_excluding(
             row = await cursor.fetchone()
     else:
         async with db.execute(
-            "SELECT url FROM corpus_images "
-            "WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
+            "SELECT url FROM corpus_images WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
             (guild_id,),
         ) as cursor:
             row = await cursor.fetchone()
     return row[0] if row else None
 
 
-async def add_frase_especial(guild_id: int, user_id: int, user_name: str, frase: str) -> bool:
+async def add_frase_especial(
+    guild_id: int, user_id: int, user_name: str, frase: str
+) -> bool:
     text = (frase or "").strip()
     if not text:
         return False
@@ -853,7 +924,13 @@ async def list_frases_especiales(guild_id: int) -> list[dict]:
     ) as cursor:
         rows = await cursor.fetchall()
     return [
-        {"id": r[0], "user_id": r[1], "user_name": r[2], "frase": r[3], "created_at": r[4]}
+        {
+            "id": r[0],
+            "user_id": r[1],
+            "user_name": r[2],
+            "frase": r[3],
+            "created_at": r[4],
+        }
         for r in rows
     ]
 
@@ -868,7 +945,13 @@ async def get_frase_especial(guild_id: int, frase_id: int) -> dict | None:
         row = await cursor.fetchone()
     if not row:
         return None
-    return {"id": row[0], "user_id": row[1], "user_name": row[2], "frase": row[3], "created_at": row[4]}
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "user_name": row[2],
+        "frase": row[3],
+        "created_at": row[4],
+    }
 
 
 async def delete_frase_especial(guild_id: int, frase_id: int) -> bool:
@@ -936,6 +1019,7 @@ async def get_random_reaction(guild_id: int) -> dict | None:
 
 # ─── Premium guilds ──────────────────────────────────────────────────────────
 
+
 async def add_premium_guild(guild_id: int, note: str | None = None) -> bool:
     db = await get_db()
     async with _db_lock:
@@ -971,6 +1055,7 @@ async def list_premium_guilds() -> list[dict]:
 
 # ─── Guild departures ────────────────────────────────────────────────────────
 
+
 async def mark_guild_departed(guild_id: int) -> None:
     db = await get_db()
     async with _db_lock:
@@ -1001,6 +1086,7 @@ async def get_expired_departures(retention_days: int) -> list[int]:
 
 
 # ─── Refeed status ───────────────────────────────────────────────────────────
+
 
 async def get_channel_refeed_status(guild_id: int, channel_id: int) -> dict | None:
     db = await get_db()
@@ -1079,11 +1165,20 @@ async def purge_guild_data(guild_id: int) -> None:
     """Delete all DB rows for a guild. R2 cleanup must be handled by the caller first."""
     db = await get_db()
     tables = [
-        "settings", "corpus_messages", "user_corpus", "corpus_gifs",
-        "corpus_images", "youtube_subscriptions", "ignored_channels",
-        "meme_schedule", "frases_especiales", "reaction_pool",
-        "premium_guilds", "guild_departures",
-        "channel_refeed_status", "guild_auto_refeed",
+        "settings",
+        "corpus_messages",
+        "user_corpus",
+        "corpus_gifs",
+        "corpus_images",
+        "youtube_subscriptions",
+        "ignored_channels",
+        "meme_schedule",
+        "frases_especiales",
+        "reaction_pool",
+        "premium_guilds",
+        "guild_departures",
+        "channel_refeed_status",
+        "guild_auto_refeed",
     ]
     async with _db_lock:
         for table in tables:
@@ -1093,6 +1188,7 @@ async def purge_guild_data(guild_id: int) -> None:
 
 
 # ─── Storage limits ──────────────────────────────────────────────────────────
+
 
 async def trim_corpus_if_needed(guild_id: int) -> None:
     max_msgs = _env_int("MAX_CORPUS_MESSAGES_PER_GUILD", 50_000)
@@ -1112,7 +1208,13 @@ async def trim_corpus_if_needed(guild_id: int) -> None:
             (guild_id, guild_id, to_delete),
         )
         await db.commit()
-    log.debug("trim_corpus: guild %s eliminados %d msgs (era %d, límite %d)", guild_id, to_delete, count, max_msgs)
+    log.debug(
+        "trim_corpus: guild %s eliminados %d msgs (era %d, límite %d)",
+        guild_id,
+        to_delete,
+        count,
+        max_msgs,
+    )
 
 
 async def trim_user_corpus_if_needed(guild_id: int) -> None:
@@ -1134,7 +1236,13 @@ async def trim_user_corpus_if_needed(guild_id: int) -> None:
             (guild_id, guild_id, to_delete),
         )
         await db.commit()
-    log.debug("trim_user_corpus: guild %s eliminados %d msgs (era %d, límite %d)", guild_id, to_delete, count, max_msgs)
+    log.debug(
+        "trim_user_corpus: guild %s eliminados %d msgs (era %d, límite %d)",
+        guild_id,
+        to_delete,
+        count,
+        max_msgs,
+    )
 
 
 async def list_image_urls(guild_id: int) -> list[str]:

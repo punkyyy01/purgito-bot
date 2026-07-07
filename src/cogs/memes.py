@@ -50,13 +50,13 @@ def is_meme_trigger(bot: commands.Bot, message: discord.Message) -> bool:
 
 
 def _detect_image_mime(image_bytes: bytes) -> str:
-    if image_bytes[:4] == b'\x89PNG':
+    if image_bytes[:4] == b"\x89PNG":
         return "image/png"
-    if image_bytes[:2] == b'\xff\xd8':
+    if image_bytes[:2] == b"\xff\xd8":
         return "image/jpeg"
-    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
         return "image/webp"
-    if image_bytes[:3] == b'GIF':
+    if image_bytes[:3] == b"GIF":
         return "image/gif"
     return "image/jpeg"
 
@@ -77,6 +77,7 @@ async def generate_groq_meme_caption(
         _groq_cooldowns[guild_id] = now
 
     import base64
+
     mime_type = _detect_image_mime(image_bytes)
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
@@ -142,7 +143,9 @@ async def generate_groq_meme_caption(
         return None
 
 
-async def _pick_pool_image(guild_id: int, log_prefix: str) -> tuple[bytes | None, str | None]:
+async def _pick_pool_image(
+    guild_id: int, log_prefix: str
+) -> tuple[bytes | None, str | None]:
     """Elige una imagen válida del pool, con eviction lazy de URLs muertas/expiradas."""
     img_bytes = None
     image_url = None
@@ -158,20 +161,33 @@ async def _pick_pool_image(guild_id: int, log_prefix: str) -> tuple[bytes | None
                 image_url = url_candidate
                 break
             else:
-                log.warning("%s: URL inválida (HTTP %s), eliminando: %s", log_prefix, img_resp.status_code, url_candidate)
+                log.warning(
+                    "%s: URL inválida (HTTP %s), eliminando: %s",
+                    log_prefix,
+                    img_resp.status_code,
+                    url_candidate,
+                )
                 await delete_image_url(guild_id, url_candidate)
         except Exception:
-            log.warning("%s: error descargando, eliminando del pool: %s", log_prefix, url_candidate)
+            log.warning(
+                "%s: error descargando, eliminando del pool: %s",
+                log_prefix,
+                url_candidate,
+            )
             await delete_image_url(guild_id, url_candidate)
     if image_url:
         _last_meme_image[guild_id] = image_url
     return img_bytes, image_url
 
 
-async def _generate_caption(guild_id: int, img_bytes: bytes, corpus_sample: list[str]) -> str | None:
+async def _generate_caption(
+    guild_id: int, img_bytes: bytes, corpus_sample: list[str]
+) -> str | None:
     caption = None
     if _groq_client:
-        caption = await generate_groq_meme_caption(img_bytes, corpus_sample, guild_id=guild_id)
+        caption = await generate_groq_meme_caption(
+            img_bytes, corpus_sample, guild_id=guild_id
+        )
     if not caption:
         model = await build_markov_model(guild_id)
         if model and not model.is_empty:
@@ -197,28 +213,50 @@ async def handle_meme_command(message: discord.Message) -> None:
 
     ref = message.reference.resolved
     if ref is None or isinstance(ref, discord.DeletedReferencedMessage):
-        log.info("handle_meme_command: ref no resuelto, haciendo fetch de message_id=%s", message.reference.message_id)
+        log.info(
+            "handle_meme_command: ref no resuelto, haciendo fetch de message_id=%s",
+            message.reference.message_id,
+        )
         try:
             ref = await message.channel.fetch_message(message.reference.message_id)
         except Exception:
-            log.info("handle_meme_command: fetch del mensaje referenciado falló, ignorando")
+            log.info(
+                "handle_meme_command: fetch del mensaje referenciado falló, ignorando"
+            )
             return
     if not isinstance(ref, discord.Message):
-        log.info("handle_meme_command: ref es %s (no es Message válido), ignorando", type(ref).__name__)
+        log.info(
+            "handle_meme_command: ref es %s (no es Message válido), ignorando",
+            type(ref).__name__,
+        )
         return
 
-    log.info("handle_meme_command: ref resuelto OK, message_id=%s, attachments=%d", ref.id, len(ref.attachments))
+    log.info(
+        "handle_meme_command: ref resuelto OK, message_id=%s, attachments=%d",
+        ref.id,
+        len(ref.attachments),
+    )
 
     image_att = next(
-        (a for a in ref.attachments if os.path.splitext(a.filename.lower())[1] in _IMAGE_EXTS),
+        (
+            a
+            for a in ref.attachments
+            if os.path.splitext(a.filename.lower())[1] in _IMAGE_EXTS
+        ),
         None,
     )
     if image_att is None:
-        log.info("handle_meme_command: no se encontró attachment de imagen en el mensaje referenciado")
+        log.info(
+            "handle_meme_command: no se encontró attachment de imagen en el mensaje referenciado"
+        )
         await message.reply("necesito que respondas a un mensaje que tenga una imagen")
         return
 
-    log.info("handle_meme_command: imagen encontrada filename=%r size=%d bytes", image_att.filename, image_att.size)
+    log.info(
+        "handle_meme_command: imagen encontrada filename=%r size=%d bytes",
+        image_att.filename,
+        image_att.size,
+    )
 
     if image_att.size > MEME_MAX_BYTES:
         await message.reply("la imagen supera el límite de 10MB")
@@ -232,7 +270,9 @@ async def handle_meme_command(message: discord.Message) -> None:
         return
 
     if not message.guild:
-        log.info("handle_meme_command: mensaje fuera de guild, no hay modelo Markov disponible")
+        log.info(
+            "handle_meme_command: mensaje fuera de guild, no hay modelo Markov disponible"
+        )
         await message.reply("no pude generar el meme, intenta de nuevo")
         return
 
@@ -240,9 +280,13 @@ async def handle_meme_command(message: discord.Message) -> None:
 
     text = None
     if _groq_client:
-        corpus_sample = await get_corpus_messages_filtered(message.guild.id, min_words=1, limit=400)
+        corpus_sample = await get_corpus_messages_filtered(
+            message.guild.id, min_words=1, limit=400
+        )
         if corpus_sample:
-            text = await generate_groq_meme_caption(img_bytes, corpus_sample, guild_id=message.guild.id)
+            text = await generate_groq_meme_caption(
+                img_bytes, corpus_sample, guild_id=message.guild.id
+            )
     if not text:
         model = await build_markov_model(message.guild.id)
         if model and not model.is_empty:
@@ -268,7 +312,9 @@ class Memes(commands.Cog):
 
     async def cog_load(self) -> None:
         if not _groq_client:
-            log.info("GROQ_API_KEY no configurada: captions de memes usarán solo Markov.")
+            log.info(
+                "GROQ_API_KEY no configurada: captions de memes usarán solo Markov."
+            )
         self.auto_meme_task.start()
 
     async def cog_unload(self) -> None:
@@ -301,15 +347,20 @@ class Memes(commands.Cog):
         added = False
         for attachment in message.attachments:
             ext = os.path.splitext(attachment.filename.lower())[1]
-            if ext in {".png", ".jpg", ".jpeg", ".webp"} \
-                    and attachment.size <= MEME_MAX_BYTES:
+            if (
+                ext in {".png", ".jpg", ".jpeg", ".webp"}
+                and attachment.size <= MEME_MAX_BYTES
+            ):
                 try:
                     if r2.available():
                         final_url = await asyncio.to_thread(
                             r2.upload_image_sync, attachment.url, payload.guild_id, ext
                         )
                         if not final_url:
-                            log.warning("No se pudo subir imagen a R2, usando URL original: %s", attachment.url)
+                            log.warning(
+                                "No se pudo subir imagen a R2, usando URL original: %s",
+                                attachment.url,
+                            )
                             final_url = attachment.url
                     else:
                         final_url = attachment.url
@@ -340,10 +391,15 @@ class Memes(commands.Cog):
 
                 img_bytes, image_url = await _pick_pool_image(guild_id, "auto_meme")
                 if not image_url:
-                    log.info("auto_meme: sin imágenes válidas en pool para guild %s", guild_id)
+                    log.info(
+                        "auto_meme: sin imágenes válidas en pool para guild %s",
+                        guild_id,
+                    )
                     continue
 
-                corpus_sample = await get_corpus_messages_filtered(guild_id, min_words=1, limit=400)
+                corpus_sample = await get_corpus_messages_filtered(
+                    guild_id, min_words=1, limit=400
+                )
                 if not corpus_sample:
                     log.info("auto_meme: corpus vacío para guild %s", guild_id)
                     continue
@@ -360,13 +416,13 @@ class Memes(commands.Cog):
                 await update_meme_last_posted(guild_id, schedule["channel_id"])
                 log.info(
                     "auto_meme: meme posteado en canal %s con caption: %s",
-                    schedule["channel_id"], caption
+                    schedule["channel_id"],
+                    caption,
                 )
 
             except Exception:
                 log.exception(
-                    "auto_meme: error inesperado para canal %s",
-                    schedule["channel_id"]
+                    "auto_meme: error inesperado para canal %s", schedule["channel_id"]
                 )
 
     @auto_meme_task.before_loop
@@ -375,7 +431,9 @@ class Memes(commands.Cog):
 
     async def _momo_impl(self, interaction: discord.Interaction) -> None:
         if not is_premium_guild(interaction.guild_id):
-            await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+            await interaction.response.send_message(
+                "esta función no está disponible en este servidor", ephemeral=True
+            )
             return
         now = time.time()
         cooldown_key = (interaction.guild_id or 0, interaction.user.id)
@@ -384,7 +442,7 @@ class Memes(commands.Cog):
             remaining = int(45 - (now - last))
             await interaction.response.send_message(
                 f"espera {remaining} segundos antes de generar otro meme",
-                ephemeral=True
+                ephemeral=True,
             )
             return
         _momo_cooldowns[cooldown_key] = now
@@ -406,14 +464,18 @@ class Memes(commands.Cog):
                 )
                 return
 
-            corpus_sample = await get_corpus_messages_filtered(guild_id, min_words=1, limit=400)
+            corpus_sample = await get_corpus_messages_filtered(
+                guild_id, min_words=1, limit=400
+            )
             if not corpus_sample:
                 await interaction.followup.send("El corpus está vacío.", ephemeral=True)
                 return
 
             caption = await _generate_caption(guild_id, img_bytes, corpus_sample)
             if not caption:
-                await interaction.followup.send("No se pudo generar el caption.", ephemeral=True)
+                await interaction.followup.send(
+                    "No se pudo generar el caption.", ephemeral=True
+                )
                 return
 
             meme_bytes = await asyncio.to_thread(render_caption, img_bytes, caption)
@@ -423,7 +485,9 @@ class Memes(commands.Cog):
 
         except Exception:
             log.exception("momo: error inesperado")
-            await interaction.followup.send("se rompió algo, revisa los logs.", ephemeral=True)
+            await interaction.followup.send(
+                "se rompió algo, revisa los logs.", ephemeral=True
+            )
 
     @app_commands.command(name="momo", description="Genera un meme del server.")
     async def momo(self, interaction: discord.Interaction):

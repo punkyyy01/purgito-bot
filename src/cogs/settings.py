@@ -54,6 +54,7 @@ PURGITO_COLOR = 0x8B00FF
 
 # ─── Infraestructura del panel ───────────────────────────────────────────────
 
+
 class SettingsCategory:
     """Una categoría del panel. Subclases definen key, emoji y sus componentes."""
 
@@ -89,7 +90,11 @@ class CategorySelect(discord.ui.Select):
             )
             for cat in CATEGORIES
         ]
-        super().__init__(placeholder=t("settings.select_placeholder", panel.locale), options=options, row=0)
+        super().__init__(
+            placeholder=t("settings.select_placeholder", panel.locale),
+            options=options,
+            row=0,
+        )
         self.panel = panel
 
     async def callback(self, interaction: discord.Interaction):
@@ -100,8 +105,13 @@ class CategorySelect(discord.ui.Select):
 class SettingsPanel(discord.ui.View):
     """Vista navegable: select de categorías (fila 0) + componentes de la categoría actual."""
 
-    def __init__(self, guild: discord.Guild, locale: str, invoker_id: int,
-                 intro: tuple[str, str] | None = None):
+    def __init__(
+        self,
+        guild: discord.Guild,
+        locale: str,
+        invoker_id: int,
+        intro: tuple[str, str] | None = None,
+    ):
         super().__init__(timeout=600)
         self.guild = guild
         self.locale = locale
@@ -124,7 +134,9 @@ class SettingsPanel(discord.ui.View):
             title, body = self.intro
             embed = discord.Embed(title=title, description=body, color=PURGITO_COLOR)
             if self.show_panel_footer:
-                embed.set_footer(text=t("settings.panel_footer", self.locale, url=PANEL_URL))
+                embed.set_footer(
+                    text=t("settings.panel_footer", self.locale, url=PANEL_URL)
+                )
             return embed
         return await cat.build_embed(self)
 
@@ -154,7 +166,10 @@ class SettingsPanel(discord.ui.View):
                 t("settings.not_your_panel", self.locale), ephemeral=True
             )
             return False
-        if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not interaction.user.guild_permissions.manage_guild
+        ):
             await interaction.response.send_message(
                 t("settings.no_permission", self.locale), ephemeral=True
             )
@@ -172,6 +187,7 @@ def _premium_locked_embed(panel: SettingsPanel, cat: SettingsCategory) -> discor
 
 # ─── Categorías ──────────────────────────────────────────────────────────────
 
+
 class IdiomaCategory(SettingsCategory):
     key = "idioma"
     emoji = "🌐"
@@ -182,7 +198,11 @@ class IdiomaCategory(SettingsCategory):
     async def build_embed(self, panel: SettingsPanel) -> discord.Embed:
         return discord.Embed(
             title=self.title(panel.locale),
-            description=t("settings.idioma.body", panel.locale, language=self._language_name(panel.locale)),
+            description=t(
+                "settings.idioma.body",
+                panel.locale,
+                language=self._language_name(panel.locale),
+            ),
             color=PURGITO_COLOR,
         )
 
@@ -190,7 +210,9 @@ class IdiomaCategory(SettingsCategory):
         select = discord.ui.Select(
             placeholder=t("settings.idioma.placeholder", panel.locale),
             options=[
-                discord.SelectOption(label=name, value=code, default=code == panel.locale)
+                discord.SelectOption(
+                    label=name, value=code, default=code == panel.locale
+                )
                 for code, name in i18n.SUPPORTED_LOCALES
             ],
             row=1,
@@ -200,7 +222,10 @@ class IdiomaCategory(SettingsCategory):
             new_locale = select.values[0]
             await i18n.set_locale(panel.guild.id, new_locale)
             panel.locale = new_locale
-            panel.intro = (t("settings.title", new_locale), t("settings.intro", new_locale))
+            panel.intro = (
+                t("settings.title", new_locale),
+                t("settings.intro", new_locale),
+            )
             await panel.refresh(interaction)
 
         select.callback = on_select
@@ -214,10 +239,21 @@ class ChatCategory(SettingsCategory):
     async def build_embed(self, panel: SettingsPanel) -> discord.Embed:
         settings = await get_chat_settings(panel.guild.id)
         lines = [
-            t("settings.chat.status_on" if settings["enabled"] else "settings.chat.status_off", panel.locale)
+            t(
+                "settings.chat.status_on"
+                if settings["enabled"]
+                else "settings.chat.status_off",
+                panel.locale,
+            )
         ]
         if settings["channel_id"]:
-            lines.append(t("settings.chat.channel_only", panel.locale, channel=f"<#{settings['channel_id']}>"))
+            lines.append(
+                t(
+                    "settings.chat.channel_only",
+                    panel.locale,
+                    channel=f"<#{settings['channel_id']}>",
+                )
+            )
         else:
             lines.append(t("settings.chat.channel_all", panel.locale))
         return discord.Embed(
@@ -270,7 +306,9 @@ class ChatCategory(SettingsCategory):
 
         async def on_channel(interaction: discord.Interaction):
             current = await get_chat_settings(panel.guild.id)
-            await set_chat_mode(panel.guild.id, current["enabled"], channel_select.values[0].id)
+            await set_chat_mode(
+                panel.guild.id, current["enabled"], channel_select.values[0].id
+            )
             await panel.refresh(interaction)
 
         enable_btn.callback = on_enable
@@ -291,7 +329,9 @@ class CorpusCategory(SettingsCategory):
             body += "\n\n" + "\n".join(f"• <#{cid}>" for cid in channel_ids)
         else:
             body += "\n\n" + t("settings.corpus.none", panel.locale)
-        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         channel_select = discord.ui.ChannelSelect(
@@ -319,7 +359,9 @@ class CorpusCategory(SettingsCategory):
 
         class WipeConfirmModal(discord.ui.Modal):
             def __init__(self):
-                super().__init__(title=t("settings.corpus.wipe_modal_title", panel.locale))
+                super().__init__(
+                    title=t("settings.corpus.wipe_modal_title", panel.locale)
+                )
                 self.confirm_input = discord.ui.TextInput(
                     label=t("settings.corpus.wipe_modal_field", panel.locale)[:45],
                     max_length=100,
@@ -357,7 +399,9 @@ class ReaccionesCategory(SettingsCategory):
             body += "\n\n" + "\n".join(f"`{r['id']}` — {r['emoji_text']}" for r in pool)
         else:
             body += "\n\n" + t("settings.reacciones.none", panel.locale)
-        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         items: list[discord.ui.Item] = []
@@ -370,7 +414,9 @@ class ReaccionesCategory(SettingsCategory):
 
         class AddEmojiModal(discord.ui.Modal):
             def __init__(self):
-                super().__init__(title=t("settings.reacciones.modal_title", panel.locale))
+                super().__init__(
+                    title=t("settings.reacciones.modal_title", panel.locale)
+                )
                 self.emoji_input = discord.ui.TextInput(
                     label=t("settings.reacciones.modal_field", panel.locale)[:45],
                     max_length=64,
@@ -398,14 +444,18 @@ class ReaccionesCategory(SettingsCategory):
             remove_select = discord.ui.Select(
                 placeholder=t("settings.reacciones.remove_placeholder", panel.locale),
                 options=[
-                    discord.SelectOption(label=r["emoji_text"][:100], value=str(r["id"]))
+                    discord.SelectOption(
+                        label=r["emoji_text"][:100], value=str(r["id"])
+                    )
                     for r in pool[:25]
                 ],
                 row=2,
             )
 
             async def on_remove(interaction: discord.Interaction):
-                await remove_reaction_from_pool(panel.guild.id, int(remove_select.values[0]))
+                await remove_reaction_from_pool(
+                    panel.guild.id, int(remove_select.values[0])
+                )
                 await panel.refresh(interaction)
 
             remove_select.callback = on_remove
@@ -425,7 +475,9 @@ class FrasesCategory(SettingsCategory):
             body += "\n\n" + "\n".join(f"`{f['id']}` — {f['frase']}" for f in frases)
         else:
             body += "\n\n" + t("settings.frases.none", panel.locale)
-        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         items: list[discord.ui.Item] = []
@@ -452,7 +504,12 @@ class FrasesCategory(SettingsCategory):
                         t("settings.frases.invalid", panel.locale), ephemeral=True
                     )
                     return
-                await add_frase_especial(panel.guild.id, interaction.user.id, interaction.user.display_name, text)
+                await add_frase_especial(
+                    panel.guild.id,
+                    interaction.user.id,
+                    interaction.user.display_name,
+                    text,
+                )
                 await panel.refresh(interaction)
 
         async def on_add(interaction: discord.Interaction):
@@ -473,7 +530,9 @@ class FrasesCategory(SettingsCategory):
             )
 
             async def on_remove(interaction: discord.Interaction):
-                await delete_frase_especial(panel.guild.id, int(remove_select.values[0]))
+                await delete_frase_especial(
+                    panel.guild.id, int(remove_select.values[0])
+                )
                 await panel.refresh(interaction)
 
             remove_select.callback = on_remove
@@ -491,7 +550,8 @@ class YouTubeCategory(SettingsCategory):
         body = t("settings.youtube.body", panel.locale)
         if subs:
             body += "\n\n" + "\n".join(
-                f"• **{s['youtube_channel_name']}** → <#{s['discord_channel_id']}>" for s in subs
+                f"• **{s['youtube_channel_name']}** → <#{s['discord_channel_id']}>"
+                for s in subs
             )
         else:
             body += "\n\n" + t("settings.youtube.none", panel.locale)
@@ -502,7 +562,9 @@ class YouTubeCategory(SettingsCategory):
             panel.yt_add_error = False
         if getattr(panel, "yt_pending_mention", None):
             body += "\n\n" + t("settings.youtube.mention_pending_hint", panel.locale)
-        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         subs = await list_youtube_subs(panel.guild.id)
@@ -552,7 +614,9 @@ class YouTubeCategory(SettingsCategory):
                     dest_select.values[0].id,
                 )
                 if added:
-                    await update_last_video_id(panel.guild.id, pending_channel, video["id"])
+                    await update_last_video_id(
+                        panel.guild.id, pending_channel, video["id"]
+                    )
                 await panel.refresh(interaction)
 
             dest_select.callback = on_dest_channel
@@ -566,7 +630,9 @@ class YouTubeCategory(SettingsCategory):
 
             class AddChannelModal(discord.ui.Modal):
                 def __init__(self):
-                    super().__init__(title=t("settings.youtube.add_modal_title", panel.locale))
+                    super().__init__(
+                        title=t("settings.youtube.add_modal_title", panel.locale)
+                    )
                     self.channel_input = discord.ui.TextInput(
                         label=t("settings.youtube.add_modal_field", panel.locale)[:45],
                         max_length=100,
@@ -577,7 +643,8 @@ class YouTubeCategory(SettingsCategory):
                     text = self.channel_input.value.strip()
                     if not text:
                         await interaction.response.send_message(
-                            t("settings.youtube.add_invalid", panel.locale), ephemeral=True
+                            t("settings.youtube.add_invalid", panel.locale),
+                            ephemeral=True,
                         )
                         return
                     panel.yt_pending_channel = text
@@ -592,7 +659,9 @@ class YouTubeCategory(SettingsCategory):
         pending_mention: str | None = getattr(panel, "yt_pending_mention", None)
         if pending_mention:
             role_select = discord.ui.RoleSelect(
-                placeholder=t("settings.youtube.mention_role_placeholder", panel.locale),
+                placeholder=t(
+                    "settings.youtube.mention_role_placeholder", panel.locale
+                ),
                 min_values=0,
                 max_values=1,
                 row=3,
@@ -641,14 +710,21 @@ class MemesCategory(SettingsCategory):
         body = t("settings.memes.body", panel.locale)
         if schedules:
             body += "\n\n" + "\n".join(
-                f"• <#{s['channel_id']}> — " + t("settings.memes.entry", panel.locale, hours=s["interval_minutes"] // 60)
+                f"• <#{s['channel_id']}> — "
+                + t(
+                    "settings.memes.entry",
+                    panel.locale,
+                    hours=s["interval_minutes"] // 60,
+                )
                 for s in schedules
             )
         else:
             body += "\n\n" + t("settings.memes.none", panel.locale)
         if getattr(panel, "memes_pending_interval", None):
             body += "\n\n" + t("settings.memes.activate_pending_hint", panel.locale)
-        return discord.Embed(title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR)
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
 
     async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
         schedules = await list_meme_schedules(panel.guild.id)
@@ -656,13 +732,20 @@ class MemesCategory(SettingsCategory):
 
         if schedules:
             channel_names = {
-                s["channel_id"]: getattr(panel.guild.get_channel(s["channel_id"]), "name", str(s["channel_id"]))
+                s["channel_id"]: getattr(
+                    panel.guild.get_channel(s["channel_id"]),
+                    "name",
+                    str(s["channel_id"]),
+                )
                 for s in schedules
             }
             remove_select = discord.ui.Select(
                 placeholder=t("settings.memes.remove_placeholder", panel.locale),
                 options=[
-                    discord.SelectOption(label=f"#{channel_names[s['channel_id']]}"[:100], value=str(s["channel_id"]))
+                    discord.SelectOption(
+                        label=f"#{channel_names[s['channel_id']]}"[:100],
+                        value=str(s["channel_id"]),
+                    )
                     for s in schedules[:25]
                 ],
                 row=1,
@@ -679,12 +762,16 @@ class MemesCategory(SettingsCategory):
         if pending_interval:
             channel_select = discord.ui.ChannelSelect(
                 channel_types=[discord.ChannelType.text],
-                placeholder=t("settings.memes.activate_channel_placeholder", panel.locale),
+                placeholder=t(
+                    "settings.memes.activate_channel_placeholder", panel.locale
+                ),
                 row=2,
             )
 
             async def on_channel(interaction: discord.Interaction):
-                await add_meme_schedule(panel.guild.id, channel_select.values[0].id, pending_interval * 60)
+                await add_meme_schedule(
+                    panel.guild.id, channel_select.values[0].id, pending_interval * 60
+                )
                 panel.memes_pending_interval = None
                 await panel.refresh(interaction)
 
@@ -699,9 +786,13 @@ class MemesCategory(SettingsCategory):
 
             class ActivateModal(discord.ui.Modal):
                 def __init__(self):
-                    super().__init__(title=t("settings.memes.activate_modal_title", panel.locale))
+                    super().__init__(
+                        title=t("settings.memes.activate_modal_title", panel.locale)
+                    )
                     self.interval_input = discord.ui.TextInput(
-                        label=t("settings.memes.activate_modal_field", panel.locale)[:45],
+                        label=t("settings.memes.activate_modal_field", panel.locale)[
+                            :45
+                        ],
                         max_length=3,
                     )
                     self.add_item(self.interval_input)
@@ -710,7 +801,8 @@ class MemesCategory(SettingsCategory):
                     raw = self.interval_input.value.strip()
                     if not raw.isdigit() or not (2 <= int(raw) <= 24):
                         await interaction.response.send_message(
-                            t("settings.memes.activate_invalid", panel.locale), ephemeral=True
+                            t("settings.memes.activate_invalid", panel.locale),
+                            ephemeral=True,
                         )
                         return
                     panel.memes_pending_interval = int(raw)
@@ -738,6 +830,7 @@ CATEGORIES: list[SettingsCategory] = [
 
 
 # ─── Onboarding ──────────────────────────────────────────────────────────────
+
 
 def build_welcome_embed(guild: discord.Guild, locale: str) -> discord.Embed:
     is_prem = is_premium_guild(guild.id)
@@ -772,12 +865,19 @@ class WelcomeView(discord.ui.View):
         self.configure_btn.label = t("welcome.btn_configure", locale)
 
     @discord.ui.button(style=discord.ButtonStyle.primary, custom_id="purgito_setup_btn")
-    async def configure_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def configure_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
         if not interaction.guild:
             return
         locale = await i18n.guild_locale(interaction.guild.id)
-        if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(t("settings.no_permission", locale), ephemeral=True)
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not interaction.user.guild_permissions.manage_guild
+        ):
+            await interaction.response.send_message(
+                t("settings.no_permission", locale), ephemeral=True
+            )
             return
         await _send_setup_panel(interaction, locale)
 
@@ -787,8 +887,12 @@ async def _send_setup_panel(interaction: discord.Interaction, locale: str) -> No
         interaction.guild,
         locale,
         interaction.user.id,
-        intro=(t("setup.title", locale),
-               t("setup.body", locale) + "\n\n" + t("setup.panel_cta", locale, url=PANEL_URL)),
+        intro=(
+            t("setup.title", locale),
+            t("setup.body", locale)
+            + "\n\n"
+            + t("setup.panel_cta", locale, url=PANEL_URL),
+        ),
     )
     await panel.rebuild()
     embed = await panel.build_embed()
@@ -796,6 +900,7 @@ async def _send_setup_panel(interaction: discord.Interaction, locale: str) -> No
 
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
+
 
 class Settings(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -818,7 +923,11 @@ class Settings(commands.Cog):
                     await channel.send(embed=embed, view=view)
                     welcome_channel = channel
                 except Exception:
-                    log.warning("on_guild_join: no se pudo enviar mensaje en %s (%s)", channel.id, guild.id)
+                    log.warning(
+                        "on_guild_join: no se pudo enviar mensaje en %s (%s)",
+                        channel.id,
+                        guild.id,
+                    )
                 break
 
         # Auto-refeed: leer el historial sin esperar a que un admin corra /refeed_all.
@@ -828,13 +937,21 @@ class Settings(commands.Cog):
             return
         chat_cog = self.bot.get_cog("Chat")
         if chat_cog is None:
-            log.warning("on_guild_join: cog Chat no cargado, no se dispara el auto-refeed (%s)", guild.id)
+            log.warning(
+                "on_guild_join: cog Chat no cargado, no se dispara el auto-refeed (%s)",
+                guild.id,
+            )
             return
         await mark_auto_refeed_triggered(guild.id)
         try:
-            progress_msg = await welcome_channel.send("🔄 Empezando a leer el historial de los canales…")
+            progress_msg = await welcome_channel.send(
+                "🔄 Empezando a leer el historial de los canales…"
+            )
         except Exception:
-            log.warning("on_guild_join: no se pudo enviar el mensaje de progreso del auto-refeed (%s)", guild.id)
+            log.warning(
+                "on_guild_join: no se pudo enviar el mensaje de progreso del auto-refeed (%s)",
+                guild.id,
+            )
             return
 
         async def on_done():
@@ -842,32 +959,52 @@ class Settings(commands.Cog):
             try:
                 await welcome_channel.send(t("welcome.auto_refeed_done", locale))
             except Exception:
-                log.warning("auto-refeed: no se pudo enviar el mensaje final (%s)", guild.id)
+                log.warning(
+                    "auto-refeed: no se pudo enviar el mensaje final (%s)", guild.id
+                )
 
         chat_cog.start_refeed_all(guild, progress_msg, welcome_channel, on_done=on_done)
 
-    @app_commands.command(name="settings", description="Abre el panel de configuración del servidor.")
+    @app_commands.command(
+        name="settings", description="Abre el panel de configuración del servidor."
+    )
     async def settings(self, interaction: discord.Interaction):
         if not interaction.guild:
-            await interaction.response.send_message(t("settings.guild_only"), ephemeral=True)
+            await interaction.response.send_message(
+                t("settings.guild_only"), ephemeral=True
+            )
             return
         locale = await i18n.guild_locale(interaction.guild.id)
-        if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(t("settings.no_permission", locale), ephemeral=True)
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not interaction.user.guild_permissions.manage_guild
+        ):
+            await interaction.response.send_message(
+                t("settings.no_permission", locale), ephemeral=True
+            )
             return
         panel = SettingsPanel(interaction.guild, locale, interaction.user.id)
         await panel.rebuild()
         embed = await panel.build_embed()
         await interaction.response.send_message(embed=embed, view=panel, ephemeral=True)
 
-    @app_commands.command(name="setup", description="Guía de configuración inicial de Purgito.")
+    @app_commands.command(
+        name="setup", description="Guía de configuración inicial de Purgito."
+    )
     async def setup_cmd(self, interaction: discord.Interaction):
         if not interaction.guild:
-            await interaction.response.send_message(t("settings.guild_only"), ephemeral=True)
+            await interaction.response.send_message(
+                t("settings.guild_only"), ephemeral=True
+            )
             return
         locale = await i18n.guild_locale(interaction.guild.id)
-        if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(t("settings.no_permission", locale), ephemeral=True)
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not interaction.user.guild_permissions.manage_guild
+        ):
+            await interaction.response.send_message(
+                t("settings.no_permission", locale), ephemeral=True
+            )
             return
         await _send_setup_panel(interaction, locale)
 

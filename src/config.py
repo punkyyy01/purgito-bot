@@ -27,7 +27,9 @@ def env_int(name: str, default: int) -> int:
 
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-ENABLE_MESSAGE_CONTENT = os.getenv("ENABLE_MESSAGE_CONTENT", "true").strip().lower() in ("1", "true", "yes")
+ENABLE_MESSAGE_CONTENT = os.getenv(
+    "ENABLE_MESSAGE_CONTENT", "true"
+).strip().lower() in ("1", "true", "yes")
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 BOT_TRIGGER_NAME = os.getenv("BOT_TRIGGER_NAME", "artemis").strip().lower()
@@ -57,7 +59,9 @@ MEME_MAX_BYTES = 10 * 1024 * 1024
 # --- Dashboard web (Discord OAuth2) ---
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
-DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
+DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip(
+    "/"
+)
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 # URL pública del panel, mostrada en /help, /setup y /settings.
 PANEL_URL = os.getenv("PANEL_URL", "https://panel.purg4t0ry.com").rstrip("/")

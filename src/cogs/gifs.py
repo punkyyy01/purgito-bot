@@ -10,13 +10,23 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import r2
-from config import PURGATORY_GUILD_ID
-from db import count_gif_urls, get_unresolved_gifs, is_channel_ignored, save_gif_url, update_gif_media_url
+from db import (
+    count_gif_urls,
+    get_random_gif_candidates,
+    get_unresolved_gifs,
+    is_channel_ignored,
+    mark_gif_check,
+    save_gif_url,
+    update_gif_media_url,
+)
 from utils import has_admin_permission
 
 log = logging.getLogger(__name__)
 
-GIF_RE = re.compile(r'https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*', re.IGNORECASE)
+GIF_RE = re.compile(
+    r"https?://\S*(tenor\.com|giphy\.com|cdn\.discordapp\.com/attachments/\S*\.gif)\S*",
+    re.IGNORECASE,
+)
 
 
 def _gif_host(url: str) -> str:
@@ -27,7 +37,9 @@ def _gif_host(url: str) -> str:
 
 
 def _is_gif_site(host: str) -> bool:
-    return host in ("tenor.com", "giphy.com") or host.endswith((".tenor.com", ".giphy.com"))
+    return host in ("tenor.com", "giphy.com") or host.endswith(
+        (".tenor.com", ".giphy.com")
+    )
 
 
 async def save_gif_candidates(guild_id: int, message: discord.Message) -> None:
@@ -53,8 +65,8 @@ async def save_gif_candidates(guild_id: int, message: discord.Message) -> None:
 
     for attachment in message.attachments:
         if attachment.url and (
-            attachment.url.lower().endswith('.gif') or
-            (attachment.content_type and 'gif' in attachment.content_type)
+            attachment.url.lower().endswith(".gif")
+            or (attachment.content_type and "gif" in attachment.content_type)
         ):
             try:
                 url = attachment.url
@@ -71,21 +83,44 @@ async def save_gif_candidates(guild_id: int, message: discord.Message) -> None:
 
 async def resolve_media_url(url: str) -> str | None:
     import requests
+
     try:
-        if "cdn.discordapp.com" in url or (r2.public_url() and url.startswith(r2.public_url())):
+        if "cdn.discordapp.com" in url or (
+            r2.public_url() and url.startswith(r2.public_url())
+        ):
             return url
         if "tenor.com" in url:
             resp = await asyncio.to_thread(
-                requests.get, f"https://tenor.com/oembed?url={url}&format=json", timeout=8
+                requests.get,
+                f"https://tenor.com/oembed?url={url}&format=json",
+                timeout=8,
             )
             return resp.json()["url"]
         if "giphy.com" in url:
             resp = await asyncio.to_thread(
-                requests.get, f"https://giphy.com/services/oembed?url={url}&format=json", timeout=8
+                requests.get,
+                f"https://giphy.com/services/oembed?url={url}&format=json",
+                timeout=8,
             )
             return resp.json()["thumbnail_url"]
     except Exception:
         return None
+    return None
+
+
+async def get_live_gif(
+    guild_id: int, attempts: int = 3, timeout: float = 3.0
+) -> str | None:
+    """Elige un GIF random, valida que cargue, prueba otro si está muerto.
+
+    No borra el objeto de R2, solo deja de sugerirlo después de max_fails.
+    """
+    for gif in await get_random_gif_candidates(guild_id, limit=attempts):
+        url = gif["media_url"] or gif["url"]
+        alive = await asyncio.to_thread(r2.is_url_alive, url, timeout)
+        await mark_gif_check(gif["id"], alive=alive)
+        if alive:
+            return url
     return None
 
 
@@ -106,6 +141,7 @@ class Gifs(commands.Cog):
         if (message.content or "").strip().startswith("!"):
             return
         from cogs.memes import is_meme_trigger
+
         if is_meme_trigger(self.bot, message):
             return
         if await is_channel_ignored(message.guild.id, message.channel.id):
@@ -115,7 +151,7 @@ class Gifs(commands.Cog):
     @tasks.loop(seconds=90)
     async def resolve_gifs_task(self):
         try:
-            gifs = await get_unresolved_gifs(PURGATORY_GUILD_ID, limit=25)
+            gifs = await get_unresolved_gifs(limit=25)
             if not gifs:
                 return
             for gif in gifs:
@@ -130,18 +166,29 @@ class Gifs(commands.Cog):
     async def _wait_ready(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="gif_add", description="Agrega un GIF a la colección del servidor.")
-    @app_commands.describe(url="URL del GIF (tenor.com, giphy.com o cdn.discordapp.com)")
+    @app_commands.command(
+        name="gif_add", description="Agrega un GIF a la colección del servidor."
+    )
+    @app_commands.describe(
+        url="URL del GIF (tenor.com, giphy.com o cdn.discordapp.com)"
+    )
     async def gif_add(self, interaction: discord.Interaction, url: str):
         from cogs.premium import is_premium_guild
+
         if not interaction.guild:
-            await interaction.response.send_message("Solo en servidores.", ephemeral=True)
+            await interaction.response.send_message(
+                "Solo en servidores.", ephemeral=True
+            )
             return
         if not has_admin_permission(interaction):
-            await interaction.response.send_message("❌ No tienes permisos para usar este comando.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ No tienes permisos para usar este comando.", ephemeral=True
+            )
             return
         if not is_premium_guild(interaction.guild_id):
-            await interaction.response.send_message("esta función no está disponible en este servidor", ephemeral=True)
+            await interaction.response.send_message(
+                "esta función no está disponible en este servidor", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -149,25 +196,37 @@ class Gifs(commands.Cog):
         url = url.strip()
         host = _gif_host(url)
         if host == "cdn.discordapp.com":
-            final_url = await asyncio.to_thread(r2.upload_gif_sync, url, interaction.guild.id)
+            final_url = await asyncio.to_thread(
+                r2.upload_gif_sync, url, interaction.guild.id
+            )
             if final_url == r2.GIF_TOO_LARGE:
-                await interaction.followup.send("❌ El GIF supera el límite de tamaño permitido.")
+                await interaction.followup.send(
+                    "❌ El GIF supera el límite de tamaño permitido."
+                )
                 return
             if not final_url:
-                await interaction.followup.send("❌ No se pudo subir el GIF a R2. Comprueba que la URL sea accesible.")
+                await interaction.followup.send(
+                    "❌ No se pudo subir el GIF a R2. Comprueba que la URL sea accesible."
+                )
                 return
         elif _is_gif_site(host):
             final_url = url
         else:
-            await interaction.followup.send("❌ URL no reconocida. Solo se aceptan GIFs de tenor.com, giphy.com o cdn.discordapp.com.")
+            await interaction.followup.send(
+                "❌ URL no reconocida. Solo se aceptan GIFs de tenor.com, giphy.com o cdn.discordapp.com."
+            )
             return
 
         inserted = await save_gif_url(interaction.guild.id, final_url)
         total = await count_gif_urls(interaction.guild.id)
         if inserted:
-            await interaction.followup.send(f"✅ GIF guardado. La colección del servidor tiene {total} GIFs en total.")
+            await interaction.followup.send(
+                f"✅ GIF guardado. La colección del servidor tiene {total} GIFs en total."
+            )
         else:
-            await interaction.followup.send(f"ℹ️ Ese GIF ya estaba en la colección. Total: {total} GIFs.")
+            await interaction.followup.send(
+                f"ℹ️ Ese GIF ya estaba en la colección. Total: {total} GIFs."
+            )
 
 
 async def setup(bot: commands.Bot) -> None:
