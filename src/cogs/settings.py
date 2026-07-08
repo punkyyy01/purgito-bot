@@ -908,11 +908,14 @@ def _looks_noisy(channel_name: str) -> bool:
     return any(hint in name for hint in NOISY_CHANNEL_HINTS)
 
 
-def _pick_refeed_done_key(saved: int, has_hidden: bool) -> str:
-    """Elige el mensaje de cierre del auto-refeed según la salud real del corpus."""
-    if saved < AUTO_REFEED_HEALTHY_MIN and has_hidden:
+def _pick_refeed_done_key(corpus_size: int, has_hidden: bool) -> str:
+    """Elige el mensaje de cierre según el tamaño TOTAL del corpus del guild,
+    no según cuántos mensajes se guardaron en esta corrida puntual — un canal
+    ya al día correctamente guarda 0 mensajes nuevos sin que eso signifique
+    que el corpus esté vacío."""
+    if corpus_size < AUTO_REFEED_HEALTHY_MIN and has_hidden:
         return "welcome.thin_corpus_hidden"
-    if saved < AUTO_REFEED_HEALTHY_MIN:
+    if corpus_size < AUTO_REFEED_HEALTHY_MIN:
         return "welcome.thin_corpus_generic"
     return "welcome.auto_refeed_done"
 
@@ -1210,11 +1213,10 @@ class Settings(commands.Cog):
 
         async def on_done(totals: dict):
             await mark_auto_refeed_completed(guild.id)
-            key = _pick_refeed_done_key(
-                totals["saved"], bool(scan and scan["hidden"])
-            )
+            total_corpus = await count_guild_corpus_messages(guild.id)
+            key = _pick_refeed_done_key(total_corpus, bool(scan and scan["hidden"]))
             try:
-                await welcome_channel.send(t(key, locale, saved=totals["saved"]))
+                await welcome_channel.send(t(key, locale, total=total_corpus))
             except Exception:
                 log.warning(
                     "auto-refeed: no se pudo enviar el mensaje final (%s)", guild.id

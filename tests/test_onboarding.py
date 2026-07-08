@@ -98,6 +98,12 @@ def test_done_key_thin_without_hidden_channels():
     assert _pick_refeed_done_key(40, False) == "welcome.thin_corpus_generic"
 
 
+def test_done_key_healthy_even_with_zero_saved_this_run():
+    # El caso real que motivó el fix: canal ya al día (0 mensajes nuevos en
+    # esta corrida) pero con un corpus total ya sano no debe leerse como flaco.
+    assert _pick_refeed_done_key(707, False) == "welcome.auto_refeed_done"
+
+
 # ─── _format_channel_names ───────────────────────────────────────────────────
 
 
