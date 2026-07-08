@@ -53,6 +53,9 @@
   "settings.corpus.wipe_modal_field": "Escribe el nombre del servidor para confirmar",
   "settings.corpus.wipe_mismatch": "❌ El nombre no coincide con el del servidor. No se borró nada.",
   "settings.corpus.wipe_success": "🗑️ Corpus vaciado.",
+  "settings.corpus.btn_wipe_gifs": "Vaciar GIFs del servidor",
+  "settings.corpus.wipe_gifs_modal_title": "Vaciar GIFs del servidor",
+  "settings.corpus.wipe_gifs_success": "🗑️ Se eliminaron {count} GIFs.",
 
   "settings.cat.frases.label": "Frases",
   "settings.cat.frases.desc": "Pool de frases especiales del servidor",

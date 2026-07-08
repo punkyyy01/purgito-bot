@@ -53,6 +53,9 @@
   "settings.corpus.wipe_modal_field": "Type the server name to confirm",
   "settings.corpus.wipe_mismatch": "❌ The name doesn't match the server's. Nothing was deleted.",
   "settings.corpus.wipe_success": "🗑️ Corpus wiped.",
+  "settings.corpus.btn_wipe_gifs": "Wipe server GIFs",
+  "settings.corpus.wipe_gifs_modal_title": "Wipe server GIFs",
+  "settings.corpus.wipe_gifs_success": "🗑️ Deleted {count} GIFs.",
 
   "settings.cat.frases.label": "Phrases",
   "settings.cat.frases.desc": "Server's special phrase pool",

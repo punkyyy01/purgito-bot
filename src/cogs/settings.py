@@ -44,6 +44,7 @@ from db import (
     update_last_video_id,
     was_auto_refeed_triggered,
     wipe_corpus,
+    wipe_gifs,
 )
 from i18n import t
 
@@ -385,7 +386,42 @@ class CorpusCategory(SettingsCategory):
             await interaction.response.send_modal(WipeConfirmModal())
 
         wipe_btn.callback = on_wipe
-        return [channel_select, wipe_btn]
+
+        wipe_gifs_btn = discord.ui.Button(
+            label=t("settings.corpus.btn_wipe_gifs", panel.locale),
+            style=discord.ButtonStyle.danger,
+            row=3,
+        )
+
+        class WipeGifsConfirmModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(
+                    title=t("settings.corpus.wipe_gifs_modal_title", panel.locale)
+                )
+                self.confirm_input = discord.ui.TextInput(
+                    label=t("settings.corpus.wipe_modal_field", panel.locale)[:45],
+                    max_length=100,
+                )
+                self.add_item(self.confirm_input)
+
+            async def on_submit(self, interaction: discord.Interaction):
+                if self.confirm_input.value.strip() != panel.guild.name:
+                    await interaction.response.send_message(
+                        t("settings.corpus.wipe_mismatch", panel.locale), ephemeral=True
+                    )
+                    return
+                count = await wipe_gifs(panel.guild.id)
+                await panel.refresh(interaction)
+                await interaction.followup.send(
+                    t("settings.corpus.wipe_gifs_success", panel.locale, count=count),
+                    ephemeral=True,
+                )
+
+        async def on_wipe_gifs(interaction: discord.Interaction):
+            await interaction.response.send_modal(WipeGifsConfirmModal())
+
+        wipe_gifs_btn.callback = on_wipe_gifs
+        return [channel_select, wipe_btn, wipe_gifs_btn]
 
 
 class ReaccionesCategory(SettingsCategory):

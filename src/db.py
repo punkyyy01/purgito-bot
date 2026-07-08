@@ -353,6 +353,28 @@ async def wipe_corpus(guild_id: int) -> None:
         await db.commit()
 
 
+async def wipe_gifs(guild_id: int) -> int:
+    """Borra todos los GIFs del guild (DB + R2 si corresponde). Retorna cuántos se borraron."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT url FROM corpus_gifs WHERE guild_id=?", (guild_id,)
+    ) as cursor:
+        rows = await cursor.fetchall()
+    urls = [r[0] for r in rows]
+
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM corpus_gifs WHERE guild_id=?", (guild_id,)
+        )
+        deleted = cursor.rowcount
+        await db.commit()
+
+    if urls:
+        await asyncio.gather(*(r2.delete_url(u) for u in urls), return_exceptions=True)
+
+    return deleted
+
+
 async def save_gif_url(guild_id: int, url: str) -> bool:
     u = (url or "").strip()
     if not u:
