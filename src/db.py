@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS channel_refeed_status (
 CREATE TABLE IF NOT EXISTS guild_auto_refeed (
     guild_id INTEGER PRIMARY KEY,
     triggered_at TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    welcome_channel_id INTEGER
 );
 """
 
@@ -188,6 +189,13 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna locale ya existe en settings")
+    try:
+        await _db.execute(
+            "ALTER TABLE guild_auto_refeed ADD COLUMN welcome_channel_id INTEGER"
+        )
+        await _db.commit()
+    except Exception:
+        log.debug("Columna welcome_channel_id ya existe en guild_auto_refeed")
     await _db.commit()
     flag_path = os.path.join(DATA_DIR, ".images_wiped_v2")
     if not os.path.exists(flag_path):
@@ -291,6 +299,15 @@ async def save_corpus_and_user_message(
         user_inserted = _was_inserted(cur2)
         await db.commit()
     return corpus_inserted, user_inserted
+
+
+async def count_guild_corpus_messages(guild_id: int) -> int:
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM corpus_messages WHERE guild_id=?", (guild_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    return int(row[0] if row else 0)
 
 
 async def count_corpus_messages(guild_id: int, channel_id: int) -> int:
@@ -1162,15 +1179,30 @@ async def was_auto_refeed_triggered(guild_id: int) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def mark_auto_refeed_triggered(guild_id: int) -> None:
+async def mark_auto_refeed_triggered(
+    guild_id: int, welcome_channel_id: int | None = None
+) -> None:
     db = await get_db()
     async with _db_lock:
         await db.execute(
-            "INSERT OR IGNORE INTO guild_auto_refeed (guild_id, triggered_at) "
-            "VALUES (?, datetime('now'))",
-            (guild_id,),
+            "INSERT INTO guild_auto_refeed (guild_id, triggered_at, welcome_channel_id) "
+            "VALUES (?, datetime('now'), ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            "    welcome_channel_id=COALESCE(excluded.welcome_channel_id, welcome_channel_id)",
+            (guild_id, welcome_channel_id),
         )
         await db.commit()
+
+
+async def get_welcome_channel_id(guild_id: int) -> int | None:
+    """Canal donde se mandó la bienvenida original (para avisos posteriores)."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT welcome_channel_id FROM guild_auto_refeed WHERE guild_id=?",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
 
 
 async def mark_auto_refeed_completed(guild_id: int) -> None:

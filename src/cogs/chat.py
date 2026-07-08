@@ -20,6 +20,7 @@ from db import (
     get_channel_refeed_status,
     get_chat_settings,
     get_random_reaction,
+    get_welcome_channel_id,
     is_channel_ignored,
     save_corpus_and_user_message,
     upsert_channel_refeed_status,
@@ -148,6 +149,54 @@ class Chat(commands.Cog):
             reply = generation.post_process_reply(text)
         for chunk in chunk_message(reply):
             await message.reply(chunk)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(
+        self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel
+    ):
+        """Si un canal pasa de invisible a visible para el bot, lo lee solo y avisa
+        en el canal de bienvenida — sin esperar a que alguien corra /refeed_all."""
+        if not isinstance(after, discord.TextChannel):
+            return
+        me = after.guild.me
+        if me is None:
+            return
+        before_perms = before.permissions_for(me)
+        after_perms = after.permissions_for(me)
+        could_see = before_perms.view_channel and before_perms.read_message_history
+        can_see_now = after_perms.view_channel and after_perms.read_message_history
+        if could_see or not can_see_now:
+            return  # no hubo ganancia de visibilidad
+        if await is_channel_ignored(after.guild.id, after.id):
+            return
+
+        try:
+            res = await self._refeed_channel(
+                after.guild.id, after, REFEED_ALL_MAX_MESSAGES
+            )
+        except Exception:
+            log.exception(
+                "on_guild_channel_update: error leyendo canal recién visible %s (%s)",
+                after.id,
+                after.guild.id,
+            )
+            return
+        if res["saved"] <= 0:
+            return
+        channel_id = await get_welcome_channel_id(after.guild.id)
+        if not channel_id:
+            return
+        report_channel = after.guild.get_channel(channel_id)
+        if report_channel is None:
+            return
+        try:
+            await report_channel.send(
+                f"👀 Ya leí {after.mention} ahora que puedo verlo: {res['saved']:,} mensajes nuevos guardados."
+            )
+        except Exception:
+            log.debug(
+                "on_guild_channel_update: no se pudo avisar en %s", channel_id
+            )
 
     # --- COMANDOS ---
 
@@ -302,18 +351,10 @@ class Chat(commands.Cog):
 
     async def _refeed_guild(
         self, guild: discord.Guild, progress_msg, report_channel
-    ) -> None:
+    ) -> dict:
         """Recorre todos los canales de texto del guild editando progress_msg con el avance,
-        y manda el resumen final con report_channel.send() (no depende de ningún interaction)."""
-        me = guild.me
-        if me is None and self.bot.user is not None:
-            me = guild.get_member(self.bot.user.id)
-        if me is None:
-            log.warning(
-                "refeed_guild: no puedo determinar los permisos del bot en %s", guild.id
-            )
-            return
-
+        y manda el resumen final con report_channel.send() (no depende de ningún interaction).
+        Retorna el dict totals para que el caller decida el mensaje de cierre."""
         totals = {
             "saved": 0,
             "completed": 0,
@@ -322,6 +363,14 @@ class Chat(commands.Cog):
             "forbidden": 0,
             "errors": 0,
         }
+        me = guild.me
+        if me is None and self.bot.user is not None:
+            me = guild.get_member(self.bot.user.id)
+        if me is None:
+            log.warning(
+                "refeed_guild: no puedo determinar los permisos del bot en %s", guild.id
+            )
+            return totals
         done_lines: list[str] = []
 
         def render(current: str | None) -> str:
@@ -384,8 +433,11 @@ class Chat(commands.Cog):
                 )
             else:
                 totals["partial"] += 1
+                # Un canal parcial tiene >REFEED_ALL_MAX_MESSAGES mensajes: /refeed
+                # directo ahí tiene un límite por corrida mucho más alto.
                 done_lines.append(
-                    f"✅ {channel.mention} — {res['saved']:,} mensajes nuevos (historial incompleto por el límite)"
+                    f"✅ {channel.mention} — {res['saved']:,} mensajes nuevos (historial incompleto por el límite; "
+                    f"tip: `/refeed` directo en ese canal lee hasta {REFEED_MAX_MESSAGES:,} por corrida)"
                 )
 
         await update(None)
@@ -413,24 +465,26 @@ class Chat(commands.Cog):
             log.warning(
                 "refeed_guild: no se pudo enviar el resumen final en %s", guild.id
             )
+        return totals
 
     def start_refeed_all(
         self,
         guild: discord.Guild,
         progress_msg,
         report_channel,
-        on_done: Callable[[], Awaitable[None]] | None = None,
+        on_done: Callable[[dict], Awaitable[None]] | None = None,
     ) -> bool:
-        """Lanza el refeed de todo el guild en background. False si ya hay uno corriendo."""
+        """Lanza el refeed de todo el guild en background. False si ya hay uno corriendo.
+        on_done recibe el dict totals del refeed."""
         existing = _refeed_all_running.get(guild.id)
         if existing and not existing.done():
             return False
 
         async def runner():
             try:
-                await self._refeed_guild(guild, progress_msg, report_channel)
+                totals = await self._refeed_guild(guild, progress_msg, report_channel)
                 if on_done is not None:
-                    await on_done()
+                    await on_done(totals)
             except Exception:
                 log.exception("refeed_all: fallo procesando guild %s", guild.id)
             finally:

@@ -23,6 +23,7 @@ from config import BOT_TRIGGER_NAME, PANEL_URL
 from db import (
     add_frase_especial,
     add_ignored_channel,
+    count_guild_corpus_messages,
     add_meme_schedule,
     add_reaction_to_pool,
     add_youtube_sub,
@@ -867,6 +868,164 @@ CATEGORIES: list[SettingsCategory] = [
 
 # ─── Onboarding ──────────────────────────────────────────────────────────────
 
+# Umbrales del onboarding: puntos de partida, ajustar viendo cómo se siente en la práctica.
+AUTO_REFEED_HEALTHY_MIN = 300  # mensajes guardados para considerar el corpus sano
+VISIBILITY_LIMITED_RATIO = 0.4  # avisar si el bot ve menos de esta fracción de canales
+VISIBILITY_LIMITED_MAX_SEEN = 3  # ...o si ve esta cantidad de canales o menos
+MAX_NOISY_SUGGESTIONS = 4  # tope de sugerencias de exclusión para no spamear
+
+NOISY_CHANNEL_HINTS = (
+    "log", "mod-log", "audit", "verifi", "regla", "rule",
+    "anuncio", "announce", "ticket", "bienvenid", "welcome", "comandos",
+)
+
+
+def _scan_channel_visibility(guild: discord.Guild) -> dict:
+    """Compara los canales de texto totales del guild contra los que Purgito
+    puede ver y leer. Sirve para avisar al admin qué tan limitado está el
+    acceso del bot en este servidor puntual."""
+    me = guild.me
+    visible, hidden = [], []
+    for ch in guild.text_channels:
+        perms = ch.permissions_for(me)
+        target = visible if (perms.view_channel and perms.read_message_history) else hidden
+        target.append(ch)
+    return {"total": len(guild.text_channels), "visible": visible, "hidden": hidden}
+
+
+def _visibility_is_limited(scan: dict) -> bool:
+    """True solo cuando vale la pena avisar. Un servidor con 1-2 canales
+    privados de staff es normal, no hay que decir nada ahí."""
+    total, seen = scan["total"], len(scan["visible"])
+    if total <= 3:
+        return False
+    return seen < total * VISIBILITY_LIMITED_RATIO or seen <= VISIBILITY_LIMITED_MAX_SEEN
+
+
+def _looks_noisy(channel_name: str) -> bool:
+    """Heurística por nombre: canales que probablemente metan ruido al corpus."""
+    name = channel_name.lower()
+    return any(hint in name for hint in NOISY_CHANNEL_HINTS)
+
+
+def _pick_refeed_done_key(saved: int, has_hidden: bool) -> str:
+    """Elige el mensaje de cierre del auto-refeed según la salud real del corpus."""
+    if saved < AUTO_REFEED_HEALTHY_MIN and has_hidden:
+        return "welcome.thin_corpus_hidden"
+    if saved < AUTO_REFEED_HEALTHY_MIN:
+        return "welcome.thin_corpus_generic"
+    return "welcome.auto_refeed_done"
+
+
+def _format_channel_names(channels: list, max_shown: int = 5) -> str:
+    """Lista corta de #nombres; el sobrante se colapsa en un "(+N)" neutro entre idiomas."""
+    text = ", ".join(f"#{ch.name}" for ch in channels[:max_shown])
+    extra = len(channels) - max_shown
+    if extra > 0:
+        text += f" (+{extra})"
+    return text
+
+
+async def _find_inviter(guild: discord.Guild) -> discord.Member | None:
+    """Busca en el audit log quién agregó al bot. None si no hay permiso o no aparece."""
+    me = guild.me
+    if me is None or not me.guild_permissions.view_audit_log:
+        return None
+    try:
+        async for entry in guild.audit_logs(
+            action=discord.AuditLogAction.bot_add, limit=5
+        ):
+            if entry.target and entry.target.id == me.id:
+                return entry.user
+    except discord.Forbidden:
+        return None
+    return None
+
+
+def build_dm_welcome_embed(
+    guild: discord.Guild, locale: str, scan: dict | None
+) -> discord.Embed:
+    """Quickstart privado para quien invitó al bot: más directo que el mensaje público."""
+    body = t("dm.body", locale, url=PANEL_URL)
+    if scan is not None and _visibility_is_limited(scan):
+        body += "\n\n" + t(
+            "dm.limited_visibility_extra",
+            locale,
+            seen=len(scan["visible"]),
+            total=scan["total"],
+        )
+    return discord.Embed(
+        title=t("dm.title", locale, guild=guild.name),
+        description=body,
+        color=PURGITO_COLOR,
+    )
+
+
+class NoisySuggestionView(discord.ui.View):
+    """Sugerencia Sí/No para excluir un canal que suena a ruido. Nunca excluye solo."""
+
+    def __init__(self, channel: discord.TextChannel, locale: str):
+        super().__init__(timeout=3600)
+        self.channel = channel
+        self.locale = locale
+        yes_btn = discord.ui.Button(
+            label=t("settings.corpus.noisy_btn_yes", locale),
+            style=discord.ButtonStyle.danger,
+        )
+        no_btn = discord.ui.Button(
+            label=t("settings.corpus.noisy_btn_no", locale),
+            style=discord.ButtonStyle.secondary,
+        )
+        yes_btn.callback = self._on_yes
+        no_btn.callback = self._on_no
+        self.add_item(yes_btn)
+        self.add_item(no_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not interaction.user.guild_permissions.manage_guild
+        ):
+            await interaction.response.send_message(
+                t("settings.no_permission", self.locale), ephemeral=True
+            )
+            return False
+        return True
+
+    async def _on_yes(self, interaction: discord.Interaction):
+        await add_ignored_channel(interaction.guild.id, self.channel.id)
+        await interaction.response.edit_message(
+            content=t(
+                "settings.corpus.noisy_excluded",
+                self.locale,
+                channel=self.channel.mention,
+            ),
+            view=None,
+        )
+        self.stop()
+
+    async def _on_no(self, interaction: discord.Interaction):
+        # El mensaje se manda una sola vez (al cerrar el auto-refeed), así que
+        # quitar los botones alcanza para no volver a preguntar por este canal.
+        await interaction.response.edit_message(
+            content=t(
+                "settings.corpus.noisy_kept", self.locale, channel=self.channel.mention
+            ),
+            view=None,
+        )
+        self.stop()
+
+
+async def _suggest_noisy_channels(
+    dest: discord.TextChannel, locale: str, visible_channels: list
+) -> None:
+    noisy = [ch for ch in visible_channels if _looks_noisy(ch.name)]
+    for ch in noisy[:MAX_NOISY_SUGGESTIONS]:
+        await dest.send(
+            t("settings.corpus.noisy_suggestion", locale, channel=ch.mention),
+            view=NoisySuggestionView(ch, locale),
+        )
+
 
 def build_welcome_embed(guild: discord.Guild, locale: str) -> discord.Embed:
     is_prem = is_premium_guild(guild.id)
@@ -919,13 +1078,30 @@ class WelcomeView(discord.ui.View):
 
 
 async def _send_setup_panel(interaction: discord.Interaction, locale: str) -> None:
+    # Estado en vivo del servidor, antes de la guía estática de 3 pasos.
+    status = ""
+    try:
+        scan = _scan_channel_visibility(interaction.guild)
+        corpus_count = await count_guild_corpus_messages(interaction.guild.id)
+        ignored_count = len(await list_ignored_channels(interaction.guild.id))
+        status = t(
+            "setup.status_header",
+            locale,
+            seen=len(scan["visible"]),
+            total=scan["total"],
+            corpus=corpus_count,
+            ignored=ignored_count,
+        )
+    except Exception:
+        log.exception("setup: no se pudo calcular el estado del servidor")
     panel = SettingsPanel(
         interaction.guild,
         locale,
         interaction.user.id,
         intro=(
             t("setup.title", locale),
-            t("setup.body", locale)
+            status
+            + t("setup.body", locale)
             + "\n\n"
             + t("setup.panel_cta", locale, url=PANEL_URL),
         ),
@@ -966,6 +1142,48 @@ class Settings(commands.Cog):
                     )
                 break
 
+        # Escaneo de visibilidad: se reusa en el aviso público, el DM y el cierre del refeed.
+        scan: dict | None = None
+        try:
+            scan = _scan_channel_visibility(guild)
+        except Exception:
+            log.exception(
+                "on_guild_join: falló el escaneo de visibilidad (%s)", guild.id
+            )
+
+        if (
+            welcome_channel is not None
+            and scan is not None
+            and _visibility_is_limited(scan)
+        ):
+            try:
+                await welcome_channel.send(
+                    t(
+                        "welcome.limited_visibility",
+                        locale,
+                        seen=len(scan["visible"]),
+                        total=scan["total"],
+                        names=_format_channel_names(scan["visible"]),
+                    )
+                )
+            except Exception:
+                log.warning(
+                    "on_guild_join: no se pudo avisar la visibilidad limitada (%s)",
+                    guild.id,
+                )
+
+        # DM al admin que invitó al bot. Nunca puede tirar abajo el resto del flujo.
+        try:
+            inviter = await _find_inviter(guild)
+            if inviter is not None:
+                await inviter.send(embed=build_dm_welcome_embed(guild, locale, scan))
+        except discord.Forbidden:
+            pass  # DMs cerrados — no rompe nada, no hace falta loguear como error
+        except Exception:
+            log.warning(
+                "on_guild_join: falló el DM al invitador (%s)", guild.id, exc_info=True
+            )
+
         # Auto-refeed: leer el historial sin esperar a que un admin corra /refeed_all.
         if welcome_channel is None:
             return
@@ -978,7 +1196,7 @@ class Settings(commands.Cog):
                 guild.id,
             )
             return
-        await mark_auto_refeed_triggered(guild.id)
+        await mark_auto_refeed_triggered(guild.id, welcome_channel.id)
         try:
             progress_msg = await welcome_channel.send(
                 "🔄 Empezando a leer el historial de los canales…"
@@ -990,14 +1208,28 @@ class Settings(commands.Cog):
             )
             return
 
-        async def on_done():
+        async def on_done(totals: dict):
             await mark_auto_refeed_completed(guild.id)
+            key = _pick_refeed_done_key(
+                totals["saved"], bool(scan and scan["hidden"])
+            )
             try:
-                await welcome_channel.send(t("welcome.auto_refeed_done", locale))
+                await welcome_channel.send(t(key, locale, saved=totals["saved"]))
             except Exception:
                 log.warning(
                     "auto-refeed: no se pudo enviar el mensaje final (%s)", guild.id
                 )
+            if scan is not None:
+                try:
+                    await _suggest_noisy_channels(
+                        welcome_channel, locale, scan["visible"]
+                    )
+                except Exception:
+                    log.warning(
+                        "auto-refeed: falló la sugerencia de canales ruidosos (%s)",
+                        guild.id,
+                        exc_info=True,
+                    )
 
         chat_cog.start_refeed_all(guild, progress_msg, welcome_channel, on_done=on_done)
 

@@ -72,7 +72,9 @@ def get_invite_url(guild_id: str) -> str:
     return (
         "https://discord.com/oauth2/authorize"
         f"?client_id={DISCORD_CLIENT_ID}"
-        "&permissions=414539926592"
+        # 414539926592 + view_audit_log (1 << 7): necesario para identificar
+        # quién invitó al bot (DM de bienvenida al admin).
+        "&permissions=414539926720"
         "&scope=bot%20applications.commands"
         f"&guild_id={guild_id}"
         "&disable_guild_select=true"
