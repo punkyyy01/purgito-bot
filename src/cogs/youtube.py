@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from urllib.parse import quote
 
 import discord
 import feedparser
@@ -14,7 +15,10 @@ log = logging.getLogger(__name__)
 
 
 async def get_latest_video(youtube_channel_id: str) -> dict | None:
-    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={youtube_channel_id}"
+    url = (
+        "https://www.youtube.com/feeds/videos.xml"
+        f"?channel_id={quote(youtube_channel_id, safe='')}"
+    )
     try:
         # Se descarga con timeout explícito: feedparser.parse(url) usa urllib
         # sin timeout y puede colgar el thread (y con él, el loop de chequeo).

@@ -989,6 +989,11 @@ async def _api_premium_checkout(request: web.Request, guild_id: int) -> web.Resp
 
 async def _webhook_polar(request: web.Request) -> web.Response:
     # Público: Polar autentica con la firma Standard Webhooks, no con sesión.
+    # Sin secret, validate_event firmaría con clave vacía y cualquiera podría
+    # forjar un evento válido (premium gratis): mejor rechazar de plano.
+    if not POLAR_WEBHOOK_SECRET:
+        log.error("Webhook de Polar recibido pero POLAR_WEBHOOK_SECRET no está configurado")
+        return web.json_response({"error": "webhook no configurado"}, status=503)
     body = await request.read()
     try:
         event = validate_event(body, dict(request.headers), POLAR_WEBHOOK_SECRET)
