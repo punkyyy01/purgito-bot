@@ -215,7 +215,7 @@ async def check_guild_access(
     """None si el usuario puede administrar el guild; si no, la respuesta de error."""
     manage = await _fetch_manage_guilds(request)
     if manage is None:
-        return web.json_response({"error": "sesión expirada, reingresá"}, status=401)
+        return web.json_response({"error": "sesión expirada, inicia sesión de nuevo"}, status=401)
     if not any(int(g["id"]) == guild_id for g in manage):
         return web.json_response({"error": "acceso denegado"}, status=403)
     return None
@@ -446,17 +446,29 @@ async def _auth_logout(request: web.Request) -> web.StreamResponse:
 
 async def _auth_error(request: web.Request) -> web.Response:
     if request.query.get("reason") == "no_guilds":
-        message = "No administrás ningún servidor de Discord."
+        message = (
+            "Este panel es para administrar la configuración de Purgito. "
+            "Necesitas el permiso <em>Gestionar servidor</em> en un servidor "
+            "donde esté el bot para poder entrar."
+        )
     else:
-        message = "No se pudo completar el inicio de sesión con Discord."
+        message = "No se pudo completar el inicio de sesión con Discord. Intenta de nuevo."
     body = (
         "<!DOCTYPE html><html lang='es'><head><meta charset='UTF-8'>"
-        "<title>Acceso denegado</title></head>"
-        "<body style='background:#0a0a0a;color:#e0e0e0;font-family:monospace;"
-        "text-align:center;padding-top:15vh'>"
-        "<h1 style='color:#8b0000'>Acceso denegado</h1>"
-        f"<p>{message}</p>"
-        "<p><a href='/auth/login' style='color:#8b0000'>← volver a intentar</a></p>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+        "<title>Purgito · Acceso denegado</title>"
+        "<link rel='preconnect' href='https://fonts.googleapis.com'>"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
+        "<link href='https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap' rel='stylesheet'>"
+        "<link rel='stylesheet' href='/static/panel.css'>"
+        "</head>"
+        "<body style='display:flex;align-items:center;justify-content:center;"
+        "min-height:100vh;text-align:center;padding:24px'>"
+        "<div>"
+        "<h1 style='color:var(--accent2)'>Acceso denegado</h1>"
+        f"<p class='dim'>{message}</p>"
+        "<a class='btn btn-primary' href='/auth/login'>Volver a intentar</a>"
+        "</div>"
         "</body></html>"
     )
     return web.Response(text=body, content_type="text/html", charset="utf-8")
@@ -518,7 +530,7 @@ async def _api_me_guilds(request: web.Request) -> web.Response:
         return web.json_response({"error": "no autenticado"}, status=401)
     manage = await _fetch_manage_guilds(request)
     if manage is None:
-        return web.json_response({"error": "sesión expirada, reingresá"}, status=401)
+        return web.json_response({"error": "sesión expirada, inicia sesión de nuevo"}, status=401)
     bot = request.app["bot"]
     bot_guild_ids = {g.id for g in bot.guilds}
     configured, available = [], []

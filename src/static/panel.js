@@ -9,19 +9,32 @@ async function apiFetch(url, options = {}) {
     opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
     opts.body = JSON.stringify(opts.body);
   }
-  const r = await fetch(url, opts);
+  let r;
+  try {
+    r = await fetch(url, opts);
+  } catch (e) {
+    throw new Error('No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.');
+  }
   if (r.status === 401) {
     location.href = '/auth/login';
-    throw new Error('sesión expirada');
+    throw new Error('Sesión expirada.');
   }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const err = new Error(data.error || (r.status === 403 ? 'Acceso denegado' : 'Error ' + r.status));
+    const err = new Error(data.error || humanError(r.status));
     err.status = r.status;
     err.premium = !!data.premium;
     throw err;
   }
   return data;
+}
+
+function humanError(status) {
+  if (status === 429) return 'Estás haciendo demasiadas solicitudes — espera un momento e intenta de nuevo.';
+  if (status >= 500) return 'Algo salió mal de nuestro lado. Intenta de nuevo en un rato.';
+  if (status === 403) return 'No tienes permiso para hacer esto.';
+  if (status === 404) return 'No se encontró lo que buscabas.';
+  return 'No se pudo completar la solicitud (código ' + status + ').';
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -40,6 +53,8 @@ function el(tag, attrs = {}, ...children) {
 }
 
 function spinner() { return el('div', { class: 'spinner' }); }
+
+function emptyState(msg) { return el('div', { class: 'empty-state' }, msg); }
 
 function flash(container, ok, msg) {
   const box = el('div', { class: 'flash ' + (ok ? 'flash-ok' : 'flash-err') }, msg);
@@ -163,7 +178,16 @@ function initPanel() {
     nav.append(el('div', {
       class: 'nav-item',
       'data-key': c.key,
+      tabindex: '0',
+      role: 'button',
+      'aria-label': c.label,
       onclick: () => activate(c.key, true),
+      onkeydown: (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          activate(c.key, true);
+        }
+      },
     },
       el('span', { class: 'nav-emoji' }, c.emoji),
       el('span', { class: 'nav-label' }, c.label),
@@ -240,7 +264,7 @@ async function loadCorpus() {
     box.innerHTML = '';
     box.append(el('p', { class: 'dim' }, 'Canales que el bot ignora al aprender mensajes:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.channels.length) list.append(el('li', {}, el('span', { class: 'dim' }, 'Ninguno')));
+    if (!data.channels.length) box.append(emptyState('Todavía no ignoras ningún canal — el bot aprende de todos.'));
     for (const ch of data.channels) {
       list.append(el('li', {},
         el('span', {}, '#' + (ch.name || ch.id)),
@@ -274,7 +298,7 @@ async function loadReacciones() {
     box.innerHTML = '';
     box.append(el('p', { class: 'dim' }, 'Emojis con los que el bot reacciona al azar:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.reactions.length) list.append(el('li', {}, el('span', { class: 'dim' }, 'Ninguno')));
+    if (!data.reactions.length) box.append(emptyState('Todavía no agregaste ningún emoji de reacción.'));
     for (const r of data.reactions) {
       list.append(el('li', {},
         el('span', {}, r.emoji_text),
@@ -308,7 +332,7 @@ async function loadFrases() {
     box.innerHTML = '';
     box.append(el('p', { class: 'dim' }, 'Frases especiales que el bot suelta de vez en cuando:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.frases.length) list.append(el('li', {}, el('span', { class: 'dim' }, 'Ninguna')));
+    if (!data.frases.length) box.append(emptyState('Todavía no agregaste ninguna frase especial.'));
     for (const f of data.frases) {
       list.append(el('li', {},
         el('span', {}, f.frase),
@@ -377,7 +401,7 @@ async function loadYouTube() {
           const ytId = extractYoutubeId(idInput.value.trim());
           const ytName = nameInput.value.trim();
           if (!ytId || !ytName || !chSel.value) {
-            flash(box, false, 'Completá el canal de YouTube, el nombre y el canal de Discord');
+            flash(box, false, 'Completa el canal de YouTube, el nombre y el canal de Discord');
             return;
           }
           try {
@@ -409,10 +433,13 @@ async function loadMemes() {
     box.innerHTML = '';
     if (e.premium) {
       box.append(el('div', { class: 'premium-card' },
-        el('h2', {}, '😏 Feature premium'),
+        el('h2', {}, '😏 Función premium'),
         el('p', { class: 'dim' },
-          'Los memes programados están disponibles solo para servidores premium. ',
-          'Contactá al owner del bot para activarlo.')));
+          'Los memes programados están disponibles solo para servidores premium.'),
+        el('button', {
+          class: 'btn btn-primary',
+          onclick: () => activate('premium', true),
+        }, 'Ver planes premium')));
     } else {
       renderError(box, e);
     }
@@ -423,7 +450,7 @@ async function loadMemes() {
     box.innerHTML = '';
     box.append(el('p', { class: 'dim' }, 'Canales con memes programados:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.schedules.length) list.append(el('li', {}, el('span', { class: 'dim' }, 'Ninguno')));
+    if (!data.schedules.length) box.append(emptyState('No hay memes programados en ningún canal todavía.'));
     for (const s of data.schedules) {
       list.append(el('li', {},
         el('span', {}, `#${s.channel_name || s.channel_id} — cada ${s.interval_hours} h`),
@@ -437,7 +464,7 @@ async function loadMemes() {
         onclick: async () => {
           const h = parseInt(hours.value, 10);
           if (!sel.value || !(h >= 2 && h <= 24)) {
-            flash(box, false, 'Elegí un canal y un intervalo entre 2 y 24 horas');
+            flash(box, false, 'Elige un canal y un intervalo entre 2 y 24 horas');
             return;
           }
           try {
@@ -564,7 +591,7 @@ async function loadGifs() {
         },
       }, 'Agregar')));
     const grid = el('div', { class: 'gif-grid' });
-    if (!data.gifs.length) grid.append(el('p', { class: 'dim' }, 'No hay GIFs guardados.'));
+    if (!data.gifs.length) box.append(emptyState('No hay GIFs guardados — agrega uno con el campo de arriba.'));
     for (const g of data.gifs) {
       grid.append(el('div', { class: 'gif-card' },
         gifThumb(g),
