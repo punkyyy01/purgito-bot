@@ -577,7 +577,7 @@ async function loadPremium() {
             el('h3', {}, 'Anual'),
             el('div', { class: 'premium-plan-price' }, '$49.99', el('span', {}, '/año')),
             el('p', { class: 'dim' }, 'El mejor valor: pagás una vez y ahorrás frente a 12 meses sueltos.')),
-          checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año')))));
+          checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año'))));
   } catch (e) { renderError(box, e); }
 }
 
