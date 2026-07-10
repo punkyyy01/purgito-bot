@@ -119,7 +119,7 @@ async def on_ready():
 if __name__ == "__main__":
     if not config.TOKEN:
         log.critical(
-            "Falta DISCORD_TOKEN en .env. Copia .env.example a .env y pon tu token."
+            "Falta DISCORD_TOKEN en .env. Copia .env.example a .env e introduce tu token."
         )
         sys.exit(1)
     try:

@@ -231,7 +231,7 @@ class Chat(commands.Cog):
             return
         try:
             await report_channel.send(
-                f"👀 Ya leí {after.mention} ahora que puedo verlo: {res['saved']:,} mensajes nuevos guardados."
+                f"👀 Ya pude leer {after.mention}: {res['saved']:,} mensajes nuevos guardados."
             )
         except Exception:
             log.debug(
@@ -242,7 +242,7 @@ class Chat(commands.Cog):
 
     @app_commands.command(
         name="generar",
-        description="Genera un mensaje usando el modelo Markov del canal.",
+        description="Genera un mensaje usando la memoria del canal.",
     )
     async def generar(self, interaction: discord.Interaction):
         if not interaction.guild:
@@ -285,7 +285,7 @@ class Chat(commands.Cog):
         count = await count_user_messages(interaction.guild.id, usuario.id)
         if count < 30:
             await interaction.followup.send(
-                f"⚠️ **{usuario.display_name}** solo tiene {count} mensaje(s) en el corpus. Necesita al menos 30."
+                f"⚠️ **{usuario.display_name}** solo tiene {count} mensaje(s) guardados. Necesita al menos 30."
             )
             return
 
@@ -294,7 +294,7 @@ class Chat(commands.Cog):
         )
         if result is None:
             await interaction.followup.send(
-                f"⚠️ No se pudo generar un mensaje para **{usuario.display_name}**. Intenta más tarde."
+                f"⚠️ No se pudo generar un mensaje para **{usuario.display_name}**. Prueba más tarde."
             )
             return
 
@@ -493,7 +493,7 @@ class Chat(commands.Cog):
             parts.append(f"⏭️ {totals['incremental']} canal(es) que ya estaban al día.")
         if totals["partial"]:
             parts.append(
-                f"⚠️ {totals['partial']} canal(es) quedaron incompletos por el límite de {REFEED_ALL_MAX_MESSAGES:,} mensajes; corre `/refeed_all` de nuevo para continuar donde quedó."
+                f"⚠️ {totals['partial']} canal(es) quedaron incompletos por el límite de {REFEED_ALL_MAX_MESSAGES:,} mensajes; ejecuta `/refeed_all` de nuevo para continuar donde quedó."
             )
         if totals["forbidden"]:
             parts.append(f"🚫 {totals['forbidden']} canal(es) sin permisos para leer.")
@@ -535,7 +535,7 @@ class Chat(commands.Cog):
 
     @app_commands.command(
         name="refeed",
-        description="Guarda los últimos mensajes del canal en el corpus del modelo Markov.",
+        description="Importa los últimos mensajes del canal a la memoria del bot.",
     )
     async def refeed(self, interaction: discord.Interaction):
         if not interaction.guild:
@@ -579,13 +579,13 @@ class Chat(commands.Cog):
         else:
             result = (
                 f"✅ Guardados {res['saved']} mensajes (leyendo el historial por primera vez).\n"
-                f"⚠️ Límite de {REFEED_MAX_MESSAGES:,} mensajes alcanzado; corre `/refeed` de nuevo para continuar donde quedó."
+                    f"⚠️ Límite de {REFEED_MAX_MESSAGES:,} mensajes alcanzado; ejecuta `/refeed` de nuevo para continuar donde quedó."
             )
         await interaction.followup.send(result)
 
     @app_commands.command(
         name="refeed_all",
-        description="Guarda mensajes de todos los canales de texto del servidor en el corpus del modelo Markov.",
+        description="Importa mensajes de todos los canales de texto del servidor a la memoria del bot.",
     )
     async def refeed_all(self, interaction: discord.Interaction):
         if not interaction.guild:
@@ -603,7 +603,7 @@ class Chat(commands.Cog):
         existing = _refeed_all_running.get(interaction.guild.id)
         if existing and not existing.done():
             await interaction.response.send_message(
-                "⏳ Ya hay un refeed en curso en este servidor; espera a que termine.",
+                "⏳ Ya hay una importación en curso en este servidor; espera a que termine.",
                 ephemeral=True,
             )
             return

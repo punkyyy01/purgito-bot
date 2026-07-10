@@ -13,7 +13,7 @@ INTRO_DESCRIPTION = (
     "**Purgito** es el bot del servidor: aprende a hablar como la comunidad "
     "usando cadenas de Markov entrenadas con los propios mensajes del server, "
     "reproduce música, guarda los GIFs que se comparten en una galería pública "
-    "y avisa cuando tus creadores de YouTube favoritos suben contenido nuevo.\n\n"
+    "y avisa cuando tus creadores favoritos de YouTube publican contenido nuevo.\n\n"
     "Todos los comandos son **slash commands** (`/`) — escribe `/` en el chat y "
     "Discord te va a mostrar las opciones con autocompletado. La única excepción "
     "es `!ping`, que es un comando de texto clásico.\n\n"
@@ -34,7 +34,7 @@ CATEGORIES = {
             ("/nowplaying", "muestra la canción actual"),
             ("/queue", "muestra la cola"),
             ("/volume <1-100>", "ajusta el volumen"),
-            ("/loop", "alterna loop: off / canción / cola"),
+            ("/loop", "alterna loop: desactivado / canción / cola"),
             ("/shuffle", "mezcla la cola"),
             ("/leave", "sale del canal de voz"),
         ],
@@ -58,9 +58,9 @@ CATEGORIES = {
         "row": 0,
         "intro": "⭐ **Función premium** — no disponible en todos los servidores.",
         "commands": [
-            ("/momo · /meme", "genera un meme del pool de imágenes"),
-            ("Reply a una imagen + “generar”", "meme de esa imagen"),
-            ("Reacción 🎯 a una imagen", "la agrega al pool de memes"),
+            ("/momo · /meme", "genera un meme de la colección de imágenes"),
+            ("Responder a una imagen + “generar”", "meme de esa imagen"),
+            ("Reacción 🎯 a una imagen", "la agrega a la colección de memes"),
             ("/settings → Memes", "memes automáticos por canal"),
         ],
     },
@@ -90,7 +90,7 @@ CATEGORIES = {
                 "/settings → Corpus / Reacciones",
                 "canales ignorados, wipe del corpus y pool de emojis",
             ),
-            ("/gif_add <url>", "agrega un GIF a la colección ⭐"),
+            ("/gif_add <url>", "añade un GIF a la colección ⭐"),
             ("!ping", "verifica que el bot está online"),
         ],
     },

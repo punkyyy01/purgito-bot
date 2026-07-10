@@ -91,7 +91,7 @@ async function initSelector() {
     const data = await apiFetch('/api/me/guilds');
     conf.innerHTML = '';
     if (!data.configured.length) {
-      conf.append(el('p', { class: 'dim' }, 'Purgito no está en ninguno de tus servidores todavía.'));
+      conf.append(el('p', { class: 'dim' }, 'Purgito todavía no está en ninguno de tus servidores.'));
     }
     for (const g of data.configured) conf.append(guildCard(g, true));
     avail.innerHTML = '';
@@ -286,7 +286,7 @@ async function loadCorpus() {
     box.innerHTML = '';
     box.append(el('p', { class: 'dim' }, 'Canales que el bot ignora al aprender mensajes:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.channels.length) box.append(emptyState('Todavía no ignoras ningún canal — el bot aprende de todos.'));
+    if (!data.channels.length) box.append(emptyState('Todavía no has ignorado ningún canal — el bot aprende de todos.'));
     for (const ch of data.channels) {
       list.append(el('li', {},
         el('span', {}, '#' + (ch.name || ch.id)),
@@ -318,9 +318,9 @@ async function loadReacciones() {
   try {
     const data = await apiFetch(`/api/server/${GUILD_ID}/settings/reacciones`);
     box.innerHTML = '';
-    box.append(el('p', { class: 'dim' }, 'Emojis con los que el bot reacciona al azar:'));
+    box.append(el('p', { class: 'dim' }, 'Colección de emojis con los que el bot reacciona al azar:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.reactions.length) box.append(emptyState('Todavía no agregaste ningún emoji de reacción.'));
+    if (!data.reactions.length) box.append(emptyState('Todavía no has agregado ningún emoji de reacción.'));
     for (const r of data.reactions) {
       list.append(el('li', {},
         el('span', {}, r.emoji_text),
@@ -352,9 +352,9 @@ async function loadFrases() {
   try {
     const data = await apiFetch(`/api/server/${GUILD_ID}/settings/frases`);
     box.innerHTML = '';
-    box.append(el('p', { class: 'dim' }, 'Frases especiales que el bot suelta de vez en cuando:'));
+    box.append(el('p', { class: 'dim' }, 'Frases especiales que el bot puede enviar de vez en cuando:'));
     const list = el('ul', { class: 'item-list' });
-    if (!data.frases.length) box.append(emptyState('Todavía no agregaste ninguna frase especial.'));
+    if (!data.frases.length) box.append(emptyState('Todavía no has agregado ninguna frase especial.'));
     for (const f of data.frases) {
       list.append(el('li', {},
         el('span', {}, f.frase),
@@ -394,7 +394,7 @@ async function loadYouTube() {
     const [data, channels, roles] = await Promise.all([
       apiFetch(`/api/server/${GUILD_ID}/settings/youtube`), getChannels(), getRoles()]);
     box.innerHTML = '';
-    box.append(el('p', { class: 'dim' }, 'Canales de YouTube anunciados cuando suben video:'));
+    box.append(el('p', { class: 'dim' }, 'Canales de YouTube anunciados cuando publican videos:'));
     const list = el('ul', { class: 'item-list' });
     if (!data.subs.length) list.append(el('li', {}, el('span', { class: 'dim' }, 'Ninguna suscripción')));
     for (const s of data.subs) {
@@ -532,7 +532,7 @@ async function loadPremium() {
       ['Mensajes guardados en memoria (corpus)', '15.000', '50.000'],
       ['Mensajes de usuario en memoria', '5.000', '20.000'],
       ['GIFs guardados', '1.500', '4.000'],
-      ['Imágenes en el pool de memes', '75', '200'],
+      ['Imágenes en la colección de memes', '75', '200'],
     ];
     if (data.premium) {
       box.append(el('div', { class: 'premium-layout' },
@@ -546,12 +546,12 @@ async function loadPremium() {
             el('li', {}, 'Límites de corpus ampliados a 50.000 mensajes'),
             el('li', {}, 'Límite de corpus de usuario ampliado a 20.000 mensajes'),
             el('li', {}, 'Límite de GIFs guardados ampliado a 4.000'),
-            el('li', {}, 'Pool de memes ampliado a 200 imágenes')))));
+            el('li', {}, 'Colección de memes ampliada a 200 imágenes')))));
       return;
     }
     box.append(el('div', { class: 'premium-layout' },
       el('div', { class: 'premium-card premium-card-wide' },
-        el('h2', {}, icon('star'), el('span', {}, 'Hazte premium')),
+        el('h2', {}, icon('star'), el('span', {}, 'Activa premium')),
         el('p', { class: 'dim' },
           'Desbloquea las funciones premium de Purgito en este servidor. El pago se procesa en Polar y el premium se activa automáticamente al completarlo.'),
         el('table', { class: 'premium-comparison' },
@@ -569,15 +569,15 @@ async function loadPremium() {
           el('div', { class: 'premium-plan-copy' },
             el('h3', {}, 'Mensual'),
             el('div', { class: 'premium-plan-price' }, '$4.99', el('span', {}, '/mes')),
-            el('p', { class: 'dim' }, 'Cobro mensual, ideal si querés probar premium sin compromiso.')),
+            el('p', { class: 'dim' }, 'Cobro mensual, ideal si quieres probar premium sin compromiso.')),
           checkoutBtn(box, 'monthly', 'Suscribirse — Mensual $4.99/mes')),
         el('article', { class: 'premium-plan-card premium-plan-featured' },
-          el('span', { class: 'premium-plan-badge' }, 'Ahorra ~16%'),
+          el('span', { class: 'premium-plan-badge' }, 'Ahorra ~33%'),
           el('div', { class: 'premium-plan-copy' },
             el('h3', {}, 'Anual'),
-            el('div', { class: 'premium-plan-price' }, '$49.99', el('span', {}, '/año')),
-            el('p', { class: 'dim' }, 'El mejor valor: pagás una vez y ahorrás frente a 12 meses sueltos.')),
-          checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año'))));
+            el('div', { class: 'premium-plan-price' }, '$39.99', el('span', {}, '/año')),
+            el('p', { class: 'dim' }, 'La mejor opción: pagas una vez y ahorras ~33% frente a 12 meses sueltos.')),
+          checkoutBtn(box, 'annual', 'Suscribirse — Anual $39.99/año'))));
   } catch (e) { renderError(box, e); }
 }
 
@@ -647,7 +647,7 @@ async function loadGifs() {
         },
       }, 'Agregar')));
     const grid = el('div', { class: 'gif-grid' });
-    if (!data.gifs.length) box.append(emptyState('No hay GIFs guardados — agrega uno con el campo de arriba.'));
+    if (!data.gifs.length) box.append(emptyState('Todavía no hay GIFs guardados — añade uno con el campo de arriba.'));
     for (const g of data.gifs) {
       grid.append(el('div', { class: 'gif-card' },
         gifThumb(g),

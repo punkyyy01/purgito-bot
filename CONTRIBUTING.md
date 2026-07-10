@@ -1,6 +1,6 @@
 # Contribuir a bot-discord-purg
 
-¡Gracias por querer aportar! Acá está todo lo que necesitás saber para trabajar localmente.
+¡Gracias por querer aportar! Aquí está todo lo que necesitas saber para trabajar localmente.
 
 ## Setup local
 
@@ -13,27 +13,27 @@
 
 ### Pasos
 
-1. **Fork y cloná el repo**
+1. **Fork y clona el repo**
 ```bash
    git clone https://github.com/<tu-usuario>/bot-discord-purg.git
    cd bot-discord-purg
 ```
 
-2. **Creá un entorno virtual e instalá dependencias**
+2. **Crea un entorno virtual e instala dependencias**
 ```bash
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
 ```
 
-3. **Configurá las variables de entorno**
-   Copiá el archivo de ejemplo y completá tus valores:
+3. **Configura las variables de entorno**
+   Copia el archivo de ejemplo y completa tus valores:
 ```bash
    cp .env.example .env
 ```
-   Editá `.env` con tus credenciales (ver sección "Variables de entorno" en el README).
+   Edita `.env` con tus credenciales (ver sección "Variables de entorno" en el README).
 
-4. **Correlo localmente**
+4. **Ejecuta el proyecto localmente**
 ```bash
    python src/bot.py
 ```
@@ -47,7 +47,7 @@
 
 ## Reportar bugs
 
-Usá los [issue templates](.github/ISSUE_TEMPLATE/) del repo.
+Usa los [issue templates](.github/ISSUE_TEMPLATE/) del repo.
 
 ## ¿Preguntas?
 

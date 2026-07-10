@@ -25,7 +25,7 @@ Cadenas de Markov · Colección de GIFs · Música · Configuración guiada · N
 |---|---|---|
 | 🧠 | **Markov automático** | Aprende del chat y genera réplicas al estilo del servidor cada 15 mensajes nuevos, con probabilidad configurable |
 | 🎭 | **Imitación de usuarios** | Imita el estilo de escritura de cualquier miembro con `/imitar` |
-| 💬 | **Modo chat** | Responde cuando lo mencionás o le hacés reply |
+| 💬 | **Modo chat** | Responde cuando lo mencionas o le respondes |
 | 🎵 | **Música** | Reproduce audio de YouTube/URLs con cola, loop, shuffle y controles interactivos |
 | 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
 | ⚙️ | **Configuración del servidor** | Panel `/settings`, onboarding `/setup` y mensaje de bienvenida con acceso rápido |
@@ -62,7 +62,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Editá `.env` con tus valores:
+Edita `.env` con tus valores:
 
 ```env
 # ── Obligatorio ────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 | `/corpus_ignorar lista` | Lista canales ignorados | Gestionar servidor |
 | `/añadir_frase <texto>` | Agrega una frase al pool del servidor | Todos |
 | `/ver_frases` | Lista todas las frases con su ID y autor | Todos |
-| `/borrar_frase <id>` | Borra una frase (propia o cualquiera si sos admin) | Todos / Admin |
+| `/borrar_frase <id>` | Borra una frase (propia o cualquiera si eres administrador) | Todos / Admin |
 
 ### 🎞️ GIFs
 
@@ -172,14 +172,14 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 
 ### 😂 Memes ⭐ (premium)
 
-> Estas funciones solo están disponibles en servidores premium. El bot owner las habilita desde el panel de administración del dashboard.
+> Estas funciones solo están disponibles en servidores premium. El propietario del bot las habilita desde el panel de administración del dashboard.
 
 | Comando | Descripción | Permisos |
 |---|---|---|
 | `/momo` | Genera un meme usando una imagen del pool (cooldown 45s por usuario) | Todos |
 | `/meme` | Alias de `/momo` | Todos |
 
-**Trigger rápido (sin slash):** respondé (reply) a un mensaje con imagen y escribí `artemis generar` o `@bot generar`.
+**Trigger rápido (sin slash):** responde (reply) a un mensaje con imagen y escribe `artemis generar` o `@bot generar`.
 
 ### ⏱️ Memes automáticos ⭐ (premium)
 
@@ -374,4 +374,4 @@ Al generar el enlace de invitación en el **Developer Portal**:
 
 ## 📄 Licencia
 
-Este proyecto usa **MIT + Commons Clause**: sos libre de usarlo, modificarlo, hacer forks y redistribuirlo, pero no está permitido venderlo ni ofrecerlo como servicio pago (hosting, SaaS, soporte) cuyo valor derive sustancialmente del bot. Ver [LICENSE](LICENSE) para el texto completo.
+Este proyecto usa **MIT + Commons Clause**: eres libre de usarlo, modificarlo, hacer forks y redistribuirlo, pero no está permitido venderlo ni ofrecerlo como servicio pago (hosting, SaaS, soporte) cuyo valor derive sustancialmente del bot. Ver [LICENSE](LICENSE) para el texto completo.

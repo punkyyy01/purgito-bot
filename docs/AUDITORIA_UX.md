@@ -9,7 +9,7 @@ puede (ni quiere) leer logs. Ordenado de mayor a menor impacto
 (probabilidad de toparse con el problema × daño a la primera impresión).
 
 El fix del fallback `"..."` (menciones y `/generar` sin historial) ya está
-aplicado en esta misma tanda y no se repite acá.
+aplicado en esta misma tanda y no se repite aquí.
 
 Nota: el prompt mencionaba "Lavalink" para música — el bot no usa Lavalink;
 la música es yt-dlp + FFmpeg, y la dependencia de configuración real es el
@@ -49,7 +49,7 @@ archivo de cookies de YouTube (`YTDLP_COOKIES`). El hallazgo 5 cubre eso.
   de saber que la respuesta está en otro canal o desactivada.
 - **Sugerencia:** ante mención directa en esos tres casos, responder una
   única vez (con cooldown por guild, mismo patrón que `empty_corpus_reply`)
-  algo tipo "acá no puedo responder — probá en #tal-canal" o "un admin
+  algo tipo "aquí no puedo responder — prueba en #tal-canal" o "un admin
   desactivó mis respuestas en este servidor". Alternativa mínima: reaccionar
   con un emoji (🤐) para que al menos se sepa que el bot está vivo.
 
@@ -93,7 +93,7 @@ archivo de cookies de YouTube (`YTDLP_COOKIES`). El hallazgo 5 cubre eso.
   servidores medianos/grandes la probabilidad de superar los 15 min es alta.
   El admin queda sin confirmación de si el bot "aprendió" o no.
 - **Sugerencia:** mandar un primer followup inmediato ("estoy leyendo el
-  historial, esto puede tardar — te aviso acá cuando termine"), reportar el
+  historial, esto puede tardar — te avisaré aquí cuando termine"), reportar el
   resultado final con `channel.send()` (que no depende del token del
   interaction), y opcionalmente ir editando un mensaje de progreso cada N
   canales.
@@ -192,7 +192,7 @@ archivo de cookies de YouTube (`YTDLP_COOKIES`). El hallazgo 5 cubre eso.
   requisitos falta.
 - **Sugerencia:** validar los prerequisitos al momento de activar (¿hay
   imágenes en la colección? ¿hay historial suficiente?) y avisar ahí mismo;
-  y/o postear una única vez en el canal configurado "quiero mandar memes acá
+  y/o publicar una única vez en el canal configurado "quiero mandar memes aquí
   pero todavía no tengo fotos — reaccioná con 🎯 a una imagen para dármelas".
 
 ## 9. El selector de idioma promete más de lo que cumple: casi todo el bot está hardcodeado en español
@@ -228,7 +228,7 @@ archivo de cookies de YouTube (`YTDLP_COOKIES`). El hallazgo 5 cubre eso.
   redirect); terminarlo en un mensaje seco se siente como error del sitio. Y
   "Error 500" no le dice a nadie qué hacer.
 - **Sugerencia:** en `no_guilds`, explicar "este panel es para administrar
-  la configuración del bot; necesitás el permiso *Gestionar servidor* en un
+  la configuración del bot; necesitas el permiso *Gestionar servidor* en un
   servidor donde esté Purgito"; en `apiFetch`, mapear códigos a mensajes
   humanos ("no se pudo guardar, probá de nuevo"); en la card premium, poner
   el link/medio de contacto real (servidor de soporte o Discord del owner).
@@ -246,7 +246,7 @@ archivo de cookies de YouTube (`YTDLP_COOKIES`). El hallazgo 5 cubre eso.
   funcionar y el error resultante apunta a "problema de conexión", que es
   falso.
 - **Sugerencia:** que el backend responda 401 JSON (en vez de redirect) para
-  requests de API, y que la galería, ante 401, muestre "necesitás iniciar
+  requests de API, y que la galería, ante 401, muestre "necesitas iniciar
   sesión con Discord para agregar GIFs" con un botón a `/auth/login` — u
   ocultar el form/botones si no hay sesión.
 

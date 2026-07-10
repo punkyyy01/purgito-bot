@@ -48,7 +48,7 @@ Guía completa para levantar Purgito de cero en un VPS Ubuntu. Cubre setup local
 ## 2. Crear el bot en Discord
 
 1. Entrá al [Discord Developer Portal](https://discord.com/developers/applications)
-2. **New Application** → poné el nombre
+2. **New Application** → coloca el nombre
 3. En el menú izquierdo: **Bot**
    - Copiá el **Token** (lo vas a necesitar como `DISCORD_TOKEN`)
    - Activá **Message Content Intent** (imprescindible para el corpus de Markov)
@@ -56,9 +56,9 @@ Guía completa para levantar Purgito de cero en un VPS Ubuntu. Cubre setup local
 4. En **OAuth2 → URL Generator**:
    - Scopes: `bot` + `applications.commands`
    - Permisos de bot: `Read Messages`, `Send Messages`, `Read Message History`, `Add Reactions`, `Embed Links`, `Connect`, `Speak`
-5. Copiá la URL generada y abrila para invitar el bot a tu servidor
+5. Copia la URL generada y ábrela para invitar el bot a tu servidor
 
-> **Tip:** para que los slash commands aparezcan al instante en un servidor específico (sin esperar hasta 1 hora de propagación global), poné `GUILD_ID` en el `.env` con el ID de ese servidor.
+> **Tip:** para que los slash commands aparezcan al instante en un servidor específico (sin esperar hasta 1 hora de propagación global), coloca `GUILD_ID` en el `.env` con el ID de ese servidor.
 
 ---
 
@@ -74,13 +74,13 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Luego copiá el archivo de ejemplo:
+Luego copia el archivo de ejemplo:
 
 ```bash
 cp .env.example .env
 ```
 
-Editá `.env` con tus valores (ver sección siguiente).
+Edita `.env` con tus valores (ver sección siguiente).
 
 ---
 
@@ -115,7 +115,7 @@ HOME_GUILD_ID=
 GUILD_ID=
 
 # Nombre con el que se activa el trigger de memes por texto plano.
-# Ej: si ponés "artemis", escribir "artemis generar" en un reply a una imagen genera un meme.
+# Ej: si colocas "artemis", escribir "artemis generar" en un reply a una imagen genera un meme.
 # Default: artemis
 BOT_TRIGGER_NAME=artemis
 
@@ -195,7 +195,7 @@ YTDLP_COOKIES=/opt/bot-discord-purg/cookies.txt
 
 1. Cloudflare Dashboard → **R2 Object Storage** → creá un bucket
 2. **R2 → Manage R2 API Tokens** → token con permisos **Object Read & Write**
-3. Copiá el **Access Key ID** y el **Secret Access Key**
+3. Copia el **Access Key ID** y el **Secret Access Key**
 4. El **Endpoint URL** está en la página del bucket bajo "S3 API"
 5. Completá las variables `R2_*` en `.env`
 
@@ -203,7 +203,7 @@ YTDLP_COOKIES=/opt/bot-discord-purg/cookies.txt
 
 1. Creá cuenta en [console.groq.com](https://console.groq.com)
 2. **API Keys** → **Create API Key**
-3. Copiá la key → `GROQ_API_KEY` en `.env`
+3. Copia la key → `GROQ_API_KEY` en `.env`
 
 El bot usa `meta-llama/llama-4-scout-17b-16e-instruct` para analizar imágenes. Si la key no está o Groq falla, hace fallback automático a Markov.
 
@@ -214,7 +214,7 @@ Si YouTube bloquea las descargas del bot:
 1. Instalá la extensión [Get cookies.txt LOCALLY](https://github.com/kairi003/Get-cookies.txt-LOCALLY) en Chrome/Firefox
 2. Logueate en [youtube.com](https://youtube.com)
 3. Exportá las cookies en formato Netscape
-4. Copiá el archivo al servidor:
+4. Copia el archivo al servidor:
 
 ```bash
 scp cookies.txt user@tu-servidor:/opt/bot-discord-purg/cookies.txt
@@ -278,7 +278,7 @@ El unit file canónico vive en el repo: [`deploy/bot-purg.service`](deploy/bot-p
 sudo cp deploy/bot-purg.service /etc/systemd/system/bot-purg.service
 ```
 
-> ⚠️ **Seguridad**: crea un usuario dedicado con `sudo useradd -r -s /bin/false bot-purg` y dale permisos sobre `/opt/bot-discord-purg`.
+> ⚠️ **Seguridad**: crea un usuario dedicado con `sudo useradd -r -s /bin/false bot-purg` y otórgale permisos sobre `/opt/bot-discord-purg`.
 
 Claves del unit:
 - `Restart=on-failure` + `RestartSec=15` — reinicio automático si el proceso muere, con espera entre intentos para no entrar en loops agresivos.
@@ -342,7 +342,7 @@ sudo systemctl restart bot-purg
 sudo systemctl status bot-purg
 ```
 
-> Si `.env.example` tiene variables nuevas, añadilas manualmente a tu `.env` antes de reiniciar.
+> Si `.env.example` tiene variables nuevas, añádelas manualmente a tu `.env` antes de reiniciar.
 
 ---
 

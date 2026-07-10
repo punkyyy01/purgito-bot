@@ -12,7 +12,7 @@ Descripción del problema o necesidad.
 
 ## Solución propuesta
 
-Descripción clara de la funcionalidad que querés agregar.
+Descripción clara de la funcionalidad que quieres agregar.
 
 ## Alternativas consideradas
 

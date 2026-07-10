@@ -349,7 +349,7 @@ class Memes(commands.Cog):
             log.debug("No se pudo reaccionar ❌ al mensaje %s", message.id)
         try:
             user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
-            await user.send(f"No pude agregar esa imagen al pool de memes: {reason}")
+            await user.send(f"No pude agregar esa imagen a la colección de memes: {reason}")
         except Exception:
             pass  # DMs cerrados: la reacción ❌ ya es la señal mínima
 
