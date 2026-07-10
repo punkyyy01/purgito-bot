@@ -11,3 +11,4 @@ groq
 yt-dlp
 PyNaCl
 aiohttp-session[secure]
+polar-sdk

@@ -105,9 +105,9 @@ DISCORD_TOKEN=
 # Default: true
 ENABLE_MESSAGE_CONTENT=true
 
-# ID del servidor donde el sistema de memes, la galería y las frases especiales
-# están habilitados. Si no se define, esas funciones quedan desactivadas globalmente.
-# Obtenerlo: click derecho en el ícono del servidor → Copiar ID (modo dev activado).
+# [DEPRECADA] ID del servidor home original. Se lee UNA sola vez al arrancar para
+# migrar el guild a la tabla premium_guilds; después ya no tiene efecto. El premium
+# se gestiona desde el panel de administración del dashboard.
 HOME_GUILD_ID=
 
 # ID del servidor para sincronización instantánea de slash commands (útil en desarrollo).

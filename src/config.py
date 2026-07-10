@@ -66,6 +66,13 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 # URL pública del panel, mostrada en /help, /setup y /settings.
 PANEL_URL = os.getenv("PANEL_URL", "https://panel.purg4t0ry.com").rstrip("/")
 
+# --- Polar.sh (compra de premium) ---
+POLAR_ACCESS_TOKEN = os.getenv("POLAR_ACCESS_TOKEN", "")
+POLAR_WEBHOOK_SECRET = os.getenv("POLAR_WEBHOOK_SECRET", "")
+POLAR_SERVER = os.getenv("POLAR_SERVER", "sandbox").strip().lower() or "sandbox"
+POLAR_PRODUCT_ID_MONTHLY = os.getenv("POLAR_PRODUCT_ID_MONTHLY", "")
+POLAR_PRODUCT_ID_ANNUAL = os.getenv("POLAR_PRODUCT_ID_ANNUAL", "")
+
 
 def get_invite_url(guild_id: str) -> str:
     """URL para invitar al bot a un guild concreto, con permisos mínimos calculados."""

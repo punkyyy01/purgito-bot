@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import html
+import json
 import logging
 import secrets
 import time
@@ -14,18 +15,31 @@ from aiohttp import web
 from aiohttp_session import get_session, setup as setup_session
 from aiohttp_session.cookie_storage import EncryptedCookieStorage
 from discord.ext import commands
+from polar_sdk import Polar
+from polar_sdk.webhooks import (
+    WebhookUnknownTypeError,
+    WebhookVerificationError,
+    validate_event,
+)
 
 from config import (
+    BOT_OWNER_ID,
     DASHBOARD_BASE_URL,
     DASHBOARD_ENABLED,
     DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET,
+    PANEL_URL,
+    POLAR_ACCESS_TOKEN,
+    POLAR_PRODUCT_ID_ANNUAL,
+    POLAR_PRODUCT_ID_MONTHLY,
+    POLAR_SERVER,
+    POLAR_WEBHOOK_SECRET,
     PURGATORY_GUILD_ID,
     SESSION_SECRET,
     WEB_PORT,
     get_invite_url,
 )
-from cogs.premium import is_premium_guild
+from cogs.premium import is_premium_guild, set_premium, unset_premium
 from cogs.youtube import get_latest_video
 from db import (
     add_frase_especial,
@@ -41,6 +55,7 @@ from db import (
     list_gif_urls,
     list_ignored_channels,
     list_meme_schedules,
+    list_premium_guilds,
     list_reaction_pool,
     list_youtube_subs,
     remove_ignored_channel,
@@ -844,6 +859,180 @@ async def _api_server_gifs_delete(request: web.Request, guild_id: int) -> web.Re
     )
 
 
+# ---------------- API: administración (solo bot owner) ----------------
+
+
+async def require_owner_api(request: web.Request) -> web.Response | None:
+    """None si la sesión pertenece al bot owner; si no, la respuesta de error.
+
+    session["user_id"] es string (viene de la API de Discord) y BOT_OWNER_ID es
+    int: se compara convirtiendo, no con == directo (que nunca sería True)."""
+    session = await get_session(request)
+    user_id = session.get("user_id")
+    if not user_id:
+        return web.json_response({"error": "no autenticado"}, status=401)
+    if not BOT_OWNER_ID or _to_int(user_id) != BOT_OWNER_ID:
+        return web.json_response({"error": "acceso denegado"}, status=403)
+    return None
+
+
+async def _api_admin_guilds(request: web.Request) -> web.Response:
+    denied = await require_owner_api(request)
+    if denied is not None:
+        return denied
+    notes = {g["guild_id"]: g["note"] for g in await list_premium_guilds()}
+    guilds = [
+        {
+            "id": str(g.id),
+            "name": g.name,
+            "icon_url": g.icon.url if g.icon else None,
+            "member_count": g.member_count,
+            "is_premium": is_premium_guild(g.id),
+            "note": notes.get(g.id),
+        }
+        for g in request.app["bot"].guilds
+    ]
+    return web.json_response({"guilds": guilds})
+
+
+async def _api_admin_premium_post(request: web.Request) -> web.Response:
+    denied = await require_owner_api(request)
+    if denied is not None:
+        return denied
+    guild_id = _to_int(request.match_info.get("guild_id"))
+    if guild_id is None:
+        return web.json_response({"error": "guild_id inválido"}, status=400)
+    data = await _json_body(request)
+    note = (str(data["note"]).strip() or None) if data and data.get("note") else None
+    added = await set_premium(guild_id, note)
+    return web.json_response({"added": added})
+
+
+async def _api_admin_premium_delete(request: web.Request) -> web.Response:
+    denied = await require_owner_api(request)
+    if denied is not None:
+        return denied
+    guild_id = _to_int(request.match_info.get("guild_id"))
+    if guild_id is None:
+        return web.json_response({"error": "guild_id inválido"}, status=400)
+    removed = await unset_premium(guild_id)
+    return web.json_response({"removed": removed})
+
+
+# ---------------- Polar.sh (compra de premium) ----------------
+
+# Cliente único para toda la vida del proceso (mismo patrón que _groq_client en
+# memes.py); el httpx interno se libera al terminar el proceso.
+_polar: Polar | None = (
+    Polar(access_token=POLAR_ACCESS_TOKEN, server=POLAR_SERVER)
+    if POLAR_ACCESS_TOKEN
+    else None
+)
+
+_POLAR_ACTIVATE = ("subscription.active", "subscription.resumed")
+_POLAR_DEACTIVATE = ("subscription.paused", "subscription.revoked")
+
+
+def _polar_plan_note(product_id) -> str:
+    if product_id == POLAR_PRODUCT_ID_ANNUAL:
+        return "Polar — anual"
+    if product_id == POLAR_PRODUCT_ID_MONTHLY:
+        return "Polar — mensual"
+    return "Polar"
+
+
+@guild_api
+async def _api_premium_get(request: web.Request, guild_id: int) -> web.Response:
+    """Estado premium del guild para la categoría Premium del panel."""
+    note = next(
+        (g["note"] for g in await list_premium_guilds() if g["guild_id"] == guild_id),
+        None,
+    )
+    return web.json_response({"premium": is_premium_guild(guild_id), "note": note})
+
+
+@guild_api
+async def _api_premium_checkout(request: web.Request, guild_id: int) -> web.Response:
+    data = await _json_body(request)
+    plan = (data or {}).get("plan")
+    if plan not in ("monthly", "annual"):
+        return web.json_response(
+            {"error": "plan inválido: usa 'monthly' o 'annual'"}, status=400
+        )
+    if _polar is None:
+        log.error("Checkout premium pedido pero POLAR_ACCESS_TOKEN no está configurado")
+        return web.json_response({"error": "pagos no disponibles"}, status=502)
+    product_id = (
+        POLAR_PRODUCT_ID_MONTHLY if plan == "monthly" else POLAR_PRODUCT_ID_ANNUAL
+    )
+    try:
+        checkout = await _polar.checkouts.create_async(
+            request={
+                "products": [product_id],
+                "metadata": {"guild_id": str(guild_id)},
+                # {CHECKOUT_ID} lo reemplaza Polar al redirigir; no interpolar acá.
+                "success_url": (
+                    f"{PANEL_URL}/server/{guild_id}/premium?checkout_id={{CHECKOUT_ID}}"
+                ),
+            }
+        )
+    except Exception:
+        log.exception(
+            "Fallo creando checkout de Polar (guild %s, plan %s)", guild_id, plan
+        )
+        return web.json_response(
+            {"error": "no se pudo iniciar el pago, intenta de nuevo más tarde"},
+            status=502,
+        )
+    return web.json_response({"checkout_url": checkout.url})
+
+
+async def _webhook_polar(request: web.Request) -> web.Response:
+    # Público: Polar autentica con la firma Standard Webhooks, no con sesión.
+    body = await request.read()
+    try:
+        event = validate_event(body, dict(request.headers), POLAR_WEBHOOK_SECRET)
+        event_type = event.TYPE
+        metadata = getattr(event.data, "metadata", None) or {}
+        product_id = getattr(event.data, "product_id", None)
+    except WebhookVerificationError:
+        log.warning(
+            "Webhook de Polar con firma inválida desde %s "
+            "(¿ataque o POLAR_WEBHOOK_SECRET mal configurado?)",
+            _client_ip(request),
+        )
+        return web.json_response({"error": "firma inválida"}, status=403)
+    except WebhookUnknownTypeError:
+        # Firma válida pero polar-sdk 0.31.7 no modela el tipo (les pasa a
+        # subscription.paused/resumed): se saca lo necesario del JSON crudo,
+        # que ya fue verificado.
+        payload = json.loads(body)
+        event_type = payload.get("type")
+        data = payload.get("data") or {}
+        metadata = data.get("metadata") or {}
+        product_id = data.get("product_id")
+
+    if event_type not in _POLAR_ACTIVATE + _POLAR_DEACTIVATE:
+        log.debug("Webhook de Polar ignorado: %s", event_type)
+        return web.json_response({"ok": True})
+
+    guild_id = _to_int(metadata.get("guild_id") if isinstance(metadata, dict) else None)
+    if guild_id is None:
+        log.warning("Webhook de Polar %s sin guild_id válido en metadata", event_type)
+        return web.json_response({"ok": True})
+
+    if event_type in _POLAR_ACTIVATE:
+        note = _polar_plan_note(product_id)
+        await set_premium(guild_id, note)
+        log.info("Premium activado por Polar para guild %s (%s)", guild_id, note)
+    else:
+        await unset_premium(guild_id)
+        log.info(
+            "Premium desactivado por Polar para guild %s (%s)", guild_id, event_type
+        )
+    return web.json_response({"ok": True})
+
+
 # ---------------- Server ----------------
 
 
@@ -894,6 +1083,9 @@ async def start_web_server(bot: commands.Bot) -> None:
     app.router.add_get("/", _gallery)
     app.router.add_get("/api/gifs", _api_gif_list)
     app.router.add_get("/health", _api_health)
+    # Fuera del bloque DASHBOARD_ENABLED: Polar le pega sin sesión OAuth
+    # y el premium debe poder activarse aunque el panel esté apagado.
+    app.router.add_post("/webhooks/polar", _webhook_polar)
     app.router.add_static("/static", Path(__file__).parent / "static")
 
     if DASHBOARD_ENABLED:
@@ -952,6 +1144,17 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.router.add_post(f"{base}/settings/gifs", _api_server_gifs_post)
         app.router.add_delete(
             f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete
+        )
+        app.router.add_get(f"{base}/premium", _api_premium_get)
+        app.router.add_post(f"{base}/premium/checkout", _api_premium_checkout)
+
+        # API de administración (solo bot owner)
+        app.router.add_get("/api/admin/guilds", _api_admin_guilds)
+        app.router.add_post(
+            "/api/admin/premium/{guild_id}", _api_admin_premium_post
+        )
+        app.router.add_delete(
+            "/api/admin/premium/{guild_id}", _api_admin_premium_delete
         )
         log.info("Dashboard OAuth2 habilitado")
     else:

@@ -113,6 +113,7 @@ const CATEGORIES = [
   { key: 'youtube',    emoji: '📺', label: 'YouTube' },
   { key: 'memes',      emoji: '😏', label: 'Memes', premium: true },
   { key: 'gifs',       emoji: '🖼️', label: 'GIFs' },
+  { key: 'premium',    emoji: '⭐', label: 'Premium' },
 ];
 
 // Cacheados por la vida de la página.
@@ -187,6 +188,7 @@ async function loadServerHead() {
 const LOADERS = {
   chat: loadChat, corpus: loadCorpus, reacciones: loadReacciones,
   frases: loadFrases, youtube: loadYouTube, memes: loadMemes, gifs: loadGifs,
+  premium: loadPremium,
 };
 
 function activate(key, push) {
@@ -446,6 +448,53 @@ async function loadMemes() {
           } catch (e) { flash(box, false, e.message); }
         },
       }, 'Agregar')));
+  } catch (e) { renderError(box, e); }
+}
+
+// ---------- Premium ----------
+
+function checkoutBtn(box, plan, label) {
+  return el('button', {
+    class: 'btn btn-primary',
+    onclick: async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const data = await apiFetch(`/api/server/${GUILD_ID}/premium/checkout`, {
+          method: 'POST', body: { plan },
+        });
+        window.location.href = data.checkout_url;
+      } catch (e) {
+        btn.disabled = false;
+        flash(box, false, e.message);
+      }
+    },
+  }, label);
+}
+
+async function loadPremium() {
+  const box = content();
+  box.append(spinner());
+  try {
+    const data = await apiFetch(`/api/server/${GUILD_ID}/premium`);
+    box.innerHTML = '';
+    if (data.premium) {
+      box.append(el('div', { class: 'premium-card' },
+        el('h2', {}, '⭐ Premium activo'),
+        el('p', { class: 'dim' },
+          'Este servidor tiene acceso a todas las funciones premium.',
+          data.note ? ` Plan: ${data.note}.` : '')));
+      return;
+    }
+    box.append(
+      el('div', { class: 'premium-card' },
+        el('h2', {}, '⭐ Hazte premium'),
+        el('p', { class: 'dim' },
+          'Desbloquea las funciones premium de Purgito en este servidor, como los memes programados. ',
+          'El pago se procesa en Polar y el premium se activa automáticamente al completarlo.')),
+      el('div', { class: 'add-row' },
+        checkoutBtn(box, 'monthly', 'Suscribirse — Mensual $4.99/mes'),
+        checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año')));
   } catch (e) { renderError(box, e); }
 }
 

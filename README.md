@@ -68,7 +68,7 @@ Editá `.env` con tus valores:
 # ── Obligatorio ────────────────────────────────────────────────────
 DISCORD_TOKEN=tu_token_aquí
 
-# ── Bot owner (para /premium add|quitar|lista) ─────────────────────
+# ── Bot owner (panel de administración del dashboard) ──────────────
 BOT_OWNER_ID=tu_discord_id
 
 # ── Desarrollo (sync instantáneo de slash commands) ────────────────
@@ -170,17 +170,9 @@ El servidor web de la galería arranca en el mismo proceso en `0.0.0.0:8080`.
 | `/settings` | Abre el panel de configuración del servidor | Gestionar servidor |
 | `/setup` | Abre la guía de configuración inicial | Gestionar servidor |
 
-### ⭐ Premium
-
-| Comando | Descripción | Permisos |
-|---|---|---|
-| `/premium add <guild_id> [nota]` | Agrega un servidor al plan premium | Solo bot owner |
-| `/premium quitar <guild_id>` | Quita un servidor del plan premium | Solo bot owner |
-| `/premium lista` | Lista los servidores premium | Solo bot owner |
-
 ### 😂 Memes ⭐ (premium)
 
-> Estas funciones solo están disponibles en servidores premium. Usá `/premium add <guild_id>` como bot owner para habilitarlas.
+> Estas funciones solo están disponibles en servidores premium. El bot owner las habilita desde el panel de administración del dashboard.
 
 | Comando | Descripción | Permisos |
 |---|---|---|
