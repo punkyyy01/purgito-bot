@@ -455,7 +455,7 @@ async function loadMemes() {
     box.innerHTML = '';
     if (e.premium) {
       box.append(el('div', { class: 'premium-card' },
-        el('h2', {}, '😏 Función premium'),
+        el('h2', {}, icon('star'), el('span', {}, 'Función premium')),
         el('p', { class: 'dim' },
           'Los memes programados están disponibles solo para servidores premium.'),
         el('button', {
@@ -527,23 +527,57 @@ async function loadPremium() {
   try {
     const data = await apiFetch(`/api/server/${GUILD_ID}/premium`);
     box.innerHTML = '';
+    const premiumRows = [
+      ['Memes automáticos programados', 'No disponible', 'Disponible'],
+      ['Mensajes guardados en memoria (corpus)', '15.000', '50.000'],
+      ['Mensajes de usuario en memoria', '5.000', '20.000'],
+      ['GIFs guardados', '1.500', '4.000'],
+      ['Imágenes en el pool de memes', '75', '200'],
+    ];
     if (data.premium) {
-      box.append(el('div', { class: 'premium-card' },
-        el('h2', {}, '⭐ Premium activo'),
-        el('p', { class: 'dim' },
-          'Este servidor tiene acceso a todas las funciones premium.',
-          data.note ? ` Plan: ${data.note}.` : '')));
+      box.append(el('div', { class: 'premium-layout' },
+        el('div', { class: 'premium-card premium-card-wide' },
+          el('h2', {}, icon('star'), el('span', {}, 'Premium activo')),
+          el('p', { class: 'dim' },
+            'Este servidor tiene acceso a todas las funciones premium.',
+            data.note ? ` Plan: ${data.note}.` : ''),
+          el('ul', { class: 'premium-receipt' },
+            el('li', {}, 'Memes automáticos programados desbloqueados'),
+            el('li', {}, 'Límites de corpus ampliados a 50.000 mensajes'),
+            el('li', {}, 'Límite de corpus de usuario ampliado a 20.000 mensajes'),
+            el('li', {}, 'Límite de GIFs guardados ampliado a 4.000'),
+            el('li', {}, 'Pool de memes ampliado a 200 imágenes')))));
       return;
     }
-    box.append(
-      el('div', { class: 'premium-card' },
-        el('h2', {}, '⭐ Hazte premium'),
+    box.append(el('div', { class: 'premium-layout' },
+      el('div', { class: 'premium-card premium-card-wide' },
+        el('h2', {}, icon('star'), el('span', {}, 'Hazte premium')),
         el('p', { class: 'dim' },
-          'Desbloquea las funciones premium de Purgito en este servidor, como los memes programados. ',
-          'El pago se procesa en Polar y el premium se activa automáticamente al completarlo.')),
-      el('div', { class: 'add-row' },
-        checkoutBtn(box, 'monthly', 'Suscribirse — Mensual $4.99/mes'),
-        checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año')));
+          'Desbloquea las funciones premium de Purgito en este servidor. El pago se procesa en Polar y el premium se activa automáticamente al completarlo.'),
+        el('table', { class: 'premium-comparison' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, 'Beneficio'),
+            el('th', {}, 'Free'),
+            el('th', { class: 'premium-column' }, 'Premium'))),
+          el('tbody', {}, premiumRows.map(([benefit, free, premium]) =>
+            el('tr', {},
+              el('th', { scope: 'row' }, benefit),
+              el('td', {}, free),
+              el('td', { class: 'premium-column' }, premium))))))),
+      el('div', { class: 'premium-plans' },
+        el('article', { class: 'premium-plan-card' },
+          el('div', { class: 'premium-plan-copy' },
+            el('h3', {}, 'Mensual'),
+            el('div', { class: 'premium-plan-price' }, '$4.99', el('span', {}, '/mes')),
+            el('p', { class: 'dim' }, 'Cobro mensual, ideal si querés probar premium sin compromiso.')),
+          checkoutBtn(box, 'monthly', 'Suscribirse — Mensual $4.99/mes')),
+        el('article', { class: 'premium-plan-card premium-plan-featured' },
+          el('span', { class: 'premium-plan-badge' }, 'Ahorra ~16%'),
+          el('div', { class: 'premium-plan-copy' },
+            el('h3', {}, 'Anual'),
+            el('div', { class: 'premium-plan-price' }, '$49.99', el('span', {}, '/año')),
+            el('p', { class: 'dim' }, 'El mejor valor: pagás una vez y ahorrás frente a 12 meses sueltos.')),
+          checkoutBtn(box, 'annual', 'Suscribirse — Anual $49.99/año')))));
   } catch (e) { renderError(box, e); }
 }
 
