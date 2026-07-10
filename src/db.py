@@ -24,6 +24,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _limit_for_guild(
+    guild_id: int | None,
+    free_name: str,
+    premium_name: str,
+    free_default: int,
+    premium_default: int,
+) -> int:
+    """Límite de almacenamiento aplicable a un guild según si es premium o no."""
+    from cogs.premium import is_premium_guild  # import diferido: evita import circular (premium.py importa de db)
+
+    if is_premium_guild(guild_id):
+        return _env_int(premium_name, premium_default)
+    return _env_int(free_name, free_default)
+
+
 async def get_db() -> aiosqlite.Connection:
     if _db is None:
         raise RuntimeError("Base de datos no inicializada. Llama a init_db() primero.")
@@ -396,7 +411,13 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
     u = (url or "").strip()
     if not u:
         return False
-    max_gifs = _env_int("MAX_GIFS_PER_GUILD", 300)
+    max_gifs = _limit_for_guild(
+        guild_id,
+        "MAX_GIFS_PER_GUILD_FREE",
+        "MAX_GIFS_PER_GUILD_PREMIUM",
+        1_500,
+        4_000,
+    )
     db = await get_db()
     evicted_url: str | None = None
     async with _db_lock:
@@ -838,7 +859,13 @@ async def save_image_url(guild_id: int, url: str) -> bool:
     u = (url or "").strip()
     if not u:
         return False
-    max_images = _env_int("MAX_IMAGES_PER_GUILD", 200)
+    max_images = _limit_for_guild(
+        guild_id,
+        "MAX_IMAGES_PER_GUILD_FREE",
+        "MAX_IMAGES_PER_GUILD_PREMIUM",
+        75,
+        200,
+    )
     db = await get_db()
     evicted_url: str | None = None
     async with _db_lock:
@@ -1245,7 +1272,13 @@ async def purge_guild_data(guild_id: int) -> None:
 
 
 async def trim_corpus_if_needed(guild_id: int) -> None:
-    max_msgs = _env_int("MAX_CORPUS_MESSAGES_PER_GUILD", 50_000)
+    max_msgs = _limit_for_guild(
+        guild_id,
+        "MAX_CORPUS_MESSAGES_PER_GUILD_FREE",
+        "MAX_CORPUS_MESSAGES_PER_GUILD_PREMIUM",
+        15_000,
+        50_000,
+    )
     db = await get_db()
     async with db.execute(
         "SELECT COUNT(*) FROM corpus_messages WHERE guild_id=?", (guild_id,)
@@ -1272,8 +1305,14 @@ async def trim_corpus_if_needed(guild_id: int) -> None:
 
 
 async def trim_user_corpus_if_needed(guild_id: int) -> None:
-    """Trim user_corpus for the whole guild (all authors combined) to MAX_USER_CORPUS_MESSAGES_PER_GUILD."""
-    max_msgs = _env_int("MAX_USER_CORPUS_MESSAGES_PER_GUILD", 20_000)
+    """Trim user_corpus for the whole guild (all authors combined) to MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM."""
+    max_msgs = _limit_for_guild(
+        guild_id,
+        "MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE",
+        "MAX_USER_CORPUS_MESSAGES_PER_GUILD_PREMIUM",
+        5_000,
+        20_000,
+    )
     db = await get_db()
     async with db.execute(
         "SELECT COUNT(*) FROM user_corpus WHERE guild_id=?", (guild_id,)

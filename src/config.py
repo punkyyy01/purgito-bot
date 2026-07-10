@@ -10,7 +10,13 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # .env: secretos y credenciales (token, API keys, DB, R2, Polar, etc.)
+
+# limits.env: límites de almacenamiento no sensibles, versionado en git aparte del .env.
+_LIMITS_ENV_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "limits.env"
+)
+load_dotenv(dotenv_path=_LIMITS_ENV_PATH)
 
 log = logging.getLogger(__name__)
 
