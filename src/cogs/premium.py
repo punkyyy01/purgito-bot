@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import BOT_OWNER_ID, PURGATORY_GUILD_ID
+from config import BOT_OWNER_ID, PANEL_URL, PURGATORY_GUILD_ID
 from db import add_premium_guild, list_premium_guilds, remove_premium_guild
 
 log = logging.getLogger(__name__)
@@ -23,6 +23,14 @@ def is_premium_guild(guild_id: int | None) -> bool:
     if guild_id is None:
         return False
     return guild_id in _premium_guild_ids
+
+
+def premium_required_message() -> str:
+    """Texto estándar del gate de premium; único lugar donde se redacta."""
+    return (
+        "⭐ Esta función solo está disponible en servidores premium. "
+        f"Puedes ver cómo conseguirlo en {PANEL_URL}"
+    )
 
 
 def discard_premium_guild(guild_id: int) -> None:

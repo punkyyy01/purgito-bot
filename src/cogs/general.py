@@ -28,6 +28,10 @@ class General(commands.Cog):
 
     async def cog_load(self) -> None:
         self.guild_cleanup_task.start()
+        # Errores de slash commands: sin esto, cualquier excepción termina en
+        # "La aplicación no respondió" sin feedback. on_command_error (abajo)
+        # solo cubre comandos de prefijo.
+        self.bot.tree.on_error = self.on_app_command_error
 
     async def cog_unload(self) -> None:
         self.guild_cleanup_task.cancel()
@@ -45,6 +49,38 @@ class General(commands.Cog):
         view = HelpView(author_id=interaction.user.id, guild_name=guild_name)
         await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
+
+    async def on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        # CommandInvokeError envuelve la excepción real; se desenvuelve para
+        # que el traceback del log muestre la causa y no solo el wrapper.
+        original = getattr(error, "original", error)
+        command = interaction.command.name if interaction.command else "desconocido"
+        log.error("Error en slash command /%s", command, exc_info=original)
+        try:
+            msg = "Algo salió mal de mi lado 😖. Intenta de nuevo en un rato."
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg, ephemeral=True)
+            elif (
+                interaction.response.type
+                is discord.InteractionResponseType.deferred_channel_message
+            ):
+                # Defer sin resolver ("pensando…"): editar no pierde contenido
+                # y hereda la visibilidad original del defer.
+                await interaction.edit_original_response(
+                    content=msg, embed=None, view=None
+                )
+            else:
+                # Ya se mostró una respuesta real (ej. /help y su embed): no
+                # pisarla con el error, avisar en un mensaje efímero aparte.
+                await interaction.followup.send(msg, ephemeral=True)
+        except (discord.HTTPException, discord.ClientException):
+            # Interacción expirada (>3 s sin defer) u otro rechazo de Discord:
+            # ya quedó logueado el error real, no hay nada más que hacer.
+            log.debug(
+                "No se pudo avisar el error de /%s al usuario", command, exc_info=True
+            )
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx: commands.Context, error: Exception):

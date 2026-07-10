@@ -173,7 +173,7 @@ class Gifs(commands.Cog):
         url="URL del GIF (tenor.com, giphy.com o cdn.discordapp.com)"
     )
     async def gif_add(self, interaction: discord.Interaction, url: str):
-        from cogs.premium import is_premium_guild
+        from cogs.premium import is_premium_guild, premium_required_message
 
         if not interaction.guild:
             await interaction.response.send_message(
@@ -187,7 +187,7 @@ class Gifs(commands.Cog):
             return
         if not is_premium_guild(interaction.guild_id):
             await interaction.response.send_message(
-                "esta función no está disponible en este servidor", ephemeral=True
+                premium_required_message(), ephemeral=True
             )
             return
 

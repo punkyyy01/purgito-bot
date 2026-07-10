@@ -106,6 +106,10 @@
   "chat.empty_reply.full": "Todavía no sé hablar como este servidor 😅 Necesito leer más mensajes de ustedes primero. Un admin puede correr `/refeed_all` para que aprenda de todo el historial del servidor, o `/setup` para terminar de configurarme.",
   "chat.empty_reply.short": "todavía estoy en blanco por acá 👀",
 
+  "chat.muted.ignored_channel": "🤐 No leo ni respondo en este canal: está en la lista de canales ignorados. Puedes cambiarlo desde `/settings` → Canales ignorados.",
+  "chat.muted.disabled": "🤐 El chat conversacional está desactivado en este servidor. Un admin puede activarlo desde `/settings` → Chat.",
+  "chat.muted.wrong_channel": "🤐 Solo respondo en {channel}. Puedes cambiarlo desde `/settings` → Chat.",
+
   "welcome.title": "¡Hola! Soy Purgito 👋",
   "welcome.intro": "Soy un bot de Markov que aprende a hablar como tu servidor.",
   "welcome.getting_started": "**Para empezar:**\n• Ya empecé a leer el historial de este servidor — te aviso aquí cuando termine. Corre `/refeed_all` cuando quieras si agregas canales nuevos o quieres que me ponga al día\n• Corre `/setup` o presiona el botón de abajo para la configuración inicial",

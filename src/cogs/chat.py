@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import time
 from collections.abc import Awaitable, Callable
 
 import discord
@@ -25,12 +26,18 @@ from db import (
     save_corpus_and_user_message,
     upsert_channel_refeed_status,
 )
-from utils import chunk_message, has_admin_permission
+from utils import LRUDict, chunk_message, has_admin_permission
 
 log = logging.getLogger(__name__)
 
 # guild_id -> task del refeed_all/auto-refeed en curso (evita dos corridas en paralelo)
 _refeed_all_running: dict[int, asyncio.Task] = {}
+
+# Mención directa con el chat apagado/restringido/canal ignorado: la explicación
+# completa sale a lo sumo una vez cada 15 min por guild; dentro del cooldown solo
+# se reacciona con 🤐. Mismo patrón que _empty_reply_cooldowns en generation.py.
+_MUTED_REPLY_COOLDOWN = 15 * 60
+_muted_reply_cooldowns: LRUDict = LRUDict(256)
 
 
 class Chat(commands.Cog):
@@ -68,25 +75,27 @@ class Chat(commands.Cog):
             return  # comandos de prefijo: los procesa commands.Bot
 
         auto_generate = False
+        ignored = False
 
         if message.guild:
-            if await is_channel_ignored(message.guild.id, message.channel.id):
-                return
+            # Un canal ignorado no entra al corpus ni recibe reacciones, pero ya
+            # no corta la función: una mención directa merece respuesta (abajo).
+            ignored = await is_channel_ignored(message.guild.id, message.channel.id)
+            if not ignored:
+                inserted = await self._save_message_to_corpus(message.guild.id, message)
+                if inserted:
+                    auto_generate = generation.note_message_for_auto_generate(
+                        message.guild.id, message.channel.id
+                    )
 
-            inserted = await self._save_message_to_corpus(message.guild.id, message)
-            if inserted:
-                auto_generate = generation.note_message_for_auto_generate(
-                    message.guild.id, message.channel.id
-                )
-
-            # Reacción aleatoria con emoji del pool configurable
-            if random.random() < 0.05:
-                try:
-                    reaction = await get_random_reaction(message.guild.id)
-                    if reaction:
-                        await message.add_reaction(reaction["emoji_text"])
-                except Exception:
-                    log.exception("Error añadiendo reacción emoji")
+                # Reacción aleatoria con emoji del pool configurable
+                if random.random() < 0.05:
+                    try:
+                        reaction = await get_random_reaction(message.guild.id)
+                        if reaction:
+                            await message.add_reaction(reaction["emoji_text"])
+                    except Exception:
+                        log.exception("Error añadiendo reacción emoji")
 
         # Verificar si el bot fue mencionado o si le respondieron a él directamente
         mention_bot = bool(
@@ -122,11 +131,23 @@ class Chat(commands.Cog):
         if not message.guild:
             return
 
+        # Mención directa pero el bot no puede conversar aquí: avisar por qué
+        # en vez de guardar silencio (el usuario cree que el bot está muerto).
+        if ignored:
+            await self._muted_reply(message, "chat.muted.ignored_channel")
+            return
+
         # Respetar restricciones de canal y modo de chat
         settings = await get_chat_settings(message.guild.id)
         if not settings["enabled"]:
+            await self._muted_reply(message, "chat.muted.disabled")
             return
         if settings["channel_id"] and message.channel.id != settings["channel_id"]:
+            await self._muted_reply(
+                message,
+                "chat.muted.wrong_channel",
+                channel=f"<#{settings['channel_id']}>",
+            )
             return
 
         if random.random() < 0.45:
@@ -149,6 +170,25 @@ class Chat(commands.Cog):
             reply = generation.post_process_reply(text)
         for chunk in chunk_message(reply):
             await message.reply(chunk)
+
+    async def _muted_reply(self, message: discord.Message, key: str, **fmt) -> None:
+        """Explica por qué el bot no conversa aquí. Primera vez en la ventana de
+        cooldown del guild: mensaje completo; después solo reacciona con 🤐."""
+        guild_id = message.guild.id
+        now = time.monotonic()
+        last = _muted_reply_cooldowns.get(guild_id)
+        if last is not None and now - last < _MUTED_REPLY_COOLDOWN:
+            try:
+                await message.add_reaction("🤐")
+            except discord.HTTPException:
+                pass  # sin permiso de reaccionar o mensaje borrado: no importa
+            return
+        _muted_reply_cooldowns[guild_id] = now
+        locale = await i18n.guild_locale(guild_id)
+        try:
+            await message.reply(i18n.t(key, locale, **fmt))
+        except discord.HTTPException:
+            log.debug("No se pudo enviar aviso de chat silenciado", exc_info=True)
 
     @commands.Cog.listener()
     async def on_guild_channel_update(

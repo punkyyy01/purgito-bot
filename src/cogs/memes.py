@@ -13,7 +13,7 @@ from discord.ext import commands, tasks
 from groq import AsyncGroq
 
 import r2
-from cogs.premium import is_premium_guild
+from cogs.premium import is_premium_guild, premium_required_message
 from config import BOT_TRIGGER_NAME, GROQ_API_KEY, GROQ_GUILD_COOLDOWN, MEME_MAX_BYTES
 from db import (
     delete_image_url,
@@ -197,6 +197,10 @@ async def _generate_caption(
 
 async def handle_meme_command(message: discord.Message) -> None:
     if not is_premium_guild(message.guild.id if message.guild else None):
+        try:
+            await message.reply(premium_required_message())
+        except Exception:
+            log.debug("No se pudo avisar el gate de premium", exc_info=True)
         return
 
     log.info(
@@ -266,14 +270,18 @@ async def handle_meme_command(message: discord.Message) -> None:
         img_bytes = await image_att.read()
     except Exception:
         log.exception("Error descargando imagen para meme")
-        await message.reply("ocurrió un error, intenta de nuevo")
+        await message.reply(
+            "⚠️ No pude descargar la imagen. Intenta de nuevo en un momento."
+        )
         return
 
     if not message.guild:
         log.info(
             "handle_meme_command: mensaje fuera de guild, no hay modelo Markov disponible"
         )
-        await message.reply("no pude generar el meme, intenta de nuevo")
+        await message.reply(
+            "⚠️ No pude generar el meme esta vez. Intenta de nuevo en un momento."
+        )
         return
 
     log.info("handle_meme_command: generando caption")
@@ -293,14 +301,18 @@ async def handle_meme_command(message: discord.Message) -> None:
             text = await asyncio.to_thread(_try_short_sentence, model)
     log.info("handle_meme_command: texto generado=%r", text)
     if not text:
-        await message.reply("no pude generar el meme, intenta de nuevo")
+        await message.reply(
+            "⚠️ No se me ocurrió ningún texto para el meme. Intenta de nuevo en un momento."
+        )
         return
 
     try:
         meme_bytes = await asyncio.to_thread(render_caption, img_bytes, text)
     except Exception:
         log.exception("Error generando meme con Pillow")
-        await message.reply("ocurrió un error, intenta de nuevo")
+        await message.reply(
+            "⚠️ Algo falló de mi lado al armar el meme. Intenta de nuevo en un rato."
+        )
         return
 
     await message.reply(file=discord.File(io.BytesIO(meme_bytes), filename="meme.png"))
@@ -327,13 +339,25 @@ class Memes(commands.Cog):
         if is_meme_trigger(self.bot, message):
             await handle_meme_command(message)
 
+    async def _target_fail(
+        self, message: discord.Message, user_id: int, reason: str
+    ) -> None:
+        """Señal de fallo para 🎯: ❌ garantizado en el mensaje + DM best-effort."""
+        try:
+            await message.add_reaction("❌")
+        except Exception:
+            log.debug("No se pudo reaccionar ❌ al mensaje %s", message.id)
+        try:
+            user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+            await user.send(f"No pude agregar esa imagen al pool de memes: {reason}")
+        except Exception:
+            pass  # DMs cerrados: la reacción ❌ ya es la señal mínima
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if str(payload.emoji) != "🎯":
             return
         if payload.guild_id is None:
-            return
-        if not is_premium_guild(payload.guild_id):
             return
         channel = self.bot.get_channel(payload.channel_id)
         if not isinstance(channel, discord.TextChannel):
@@ -344,37 +368,68 @@ class Memes(commands.Cog):
             return
         if message.author.bot:
             return
+        if not is_premium_guild(payload.guild_id):
+            await self._target_fail(
+                message, payload.user_id, premium_required_message()
+            )
+            return
+
         added = False
+        oversized = False
+        unsupported = False
+        duplicate = False
+        save_error = False
         for attachment in message.attachments:
             ext = os.path.splitext(attachment.filename.lower())[1]
-            if (
-                ext in {".png", ".jpg", ".jpeg", ".webp"}
-                and attachment.size <= MEME_MAX_BYTES
-            ):
-                try:
-                    if r2.available():
-                        final_url = await asyncio.to_thread(
-                            r2.upload_image_sync, attachment.url, payload.guild_id, ext
+            if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+                unsupported = True
+                continue
+            if attachment.size > MEME_MAX_BYTES:
+                oversized = True
+                continue
+            try:
+                if r2.available():
+                    final_url = await asyncio.to_thread(
+                        r2.upload_image_sync, attachment.url, payload.guild_id, ext
+                    )
+                    if not final_url:
+                        log.warning(
+                            "No se pudo subir imagen a R2, usando URL original: %s",
+                            attachment.url,
                         )
-                        if not final_url:
-                            log.warning(
-                                "No se pudo subir imagen a R2, usando URL original: %s",
-                                attachment.url,
-                            )
-                            final_url = attachment.url
-                    else:
                         final_url = attachment.url
-                    inserted = await save_image_url(payload.guild_id, final_url)
-                    if inserted:
-                        added = True
-                        log.info("Imagen agregada al pool 🎯: %s", final_url)
-                except Exception:
-                    log.exception("Error guardando imagen por reaccion")
+                else:
+                    final_url = attachment.url
+                inserted = await save_image_url(payload.guild_id, final_url)
+                if inserted:
+                    added = True
+                    log.info("Imagen agregada al pool 🎯: %s", final_url)
+                else:
+                    duplicate = True
+            except Exception:
+                save_error = True
+                log.exception("Error guardando imagen por reaccion")
         if added:
             try:
                 await message.add_reaction("✅")
             except Exception:
                 pass
+            return
+
+        # Nada guardado: explicar por qué en vez de quedarse callado.
+        if duplicate:
+            reason = "esa imagen ya estaba en el pool."
+        elif save_error:
+            reason = "algo falló de mi lado al guardarla, intenta de nuevo en un rato."
+        elif oversized:
+            reason = (
+                f"la imagen supera el límite de {MEME_MAX_BYTES // (1024 * 1024)} MB."
+            )
+        elif unsupported:
+            reason = "ese formato no es compatible (acepto png, jpg, jpeg y webp)."
+        else:
+            reason = "ese mensaje no tiene ninguna imagen adjunta."
+        await self._target_fail(message, payload.user_id, reason)
 
     @tasks.loop(minutes=10)
     async def auto_meme_task(self):
@@ -432,7 +487,7 @@ class Memes(commands.Cog):
     async def _momo_impl(self, interaction: discord.Interaction) -> None:
         if not is_premium_guild(interaction.guild_id):
             await interaction.response.send_message(
-                "esta función no está disponible en este servidor", ephemeral=True
+                premium_required_message(), ephemeral=True
             )
             return
         now = time.time()
@@ -459,7 +514,8 @@ class Memes(commands.Cog):
             img_bytes, image_url = await _pick_pool_image(guild_id, "momo")
             if not image_url:
                 await interaction.followup.send(
-                    "Sin imágenes válidas en el pool. Añade fotos con 🎯.",
+                    "⚠️ Todavía no tengo fotos guardadas para este servidor — "
+                    "reacciona con 🎯 a una imagen para agregarla.",
                     ephemeral=True,
                 )
                 return
@@ -468,13 +524,19 @@ class Memes(commands.Cog):
                 guild_id, min_words=1, limit=400
             )
             if not corpus_sample:
-                await interaction.followup.send("El corpus está vacío.", ephemeral=True)
+                await interaction.followup.send(
+                    "⚠️ Todavía no he leído suficientes mensajes de este servidor "
+                    "para inspirarme. Vuelve a intentar cuando haya más conversación.",
+                    ephemeral=True,
+                )
                 return
 
             caption = await _generate_caption(guild_id, img_bytes, corpus_sample)
             if not caption:
                 await interaction.followup.send(
-                    "No se pudo generar el caption.", ephemeral=True
+                    "⚠️ No se me ocurrió ningún texto para el meme. "
+                    "Intenta de nuevo en un momento.",
+                    ephemeral=True,
                 )
                 return
 
@@ -486,7 +548,8 @@ class Memes(commands.Cog):
         except Exception:
             log.exception("momo: error inesperado")
             await interaction.followup.send(
-                "se rompió algo, revisa los logs.", ephemeral=True
+                "😖 Algo falló de mi lado. Intenta de nuevo en un rato.",
+                ephemeral=True,
             )
 
     @app_commands.command(name="momo", description="Genera un meme del server.")
