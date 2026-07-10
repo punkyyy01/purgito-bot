@@ -107,7 +107,7 @@ async function initSelector() {
 function guildCard(g, configured) {
   const info = el('div', { class: 'card-info' },
     el('div', { class: 'card-name' }, g.name,
-      configured && g.is_premium ? el('span', { class: 'badge' }, 'PREMIUM') : null),
+      configured && g.is_premium ? el('span', { class: 'badge badge-premium' }, 'PREMIUM') : null),
     el('div', { class: 'card-sub' },
       configured
         ? (g.member_count != null ? g.member_count + ' miembros' : '')
@@ -120,15 +120,35 @@ function guildCard(g, configured) {
 
 // ---------- panel por servidor (/server/{id}) ----------
 
+// Íconos de línea (estilo Lucide, currentColor, viewBox 24). Se inyectan por
+// innerHTML sobre un <span class="nav-icon">; el parser HTML del navegador crea
+// los nodos SVG con el namespace correcto.
+const ICONS = {
+  chat:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  corpus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  smile:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
+  sparkle:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/></svg>',
+  play:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>',
+  image:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
+  film:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>',
+  star:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+};
+
+function icon(name) {
+  const s = el('span', { class: 'nav-icon' });
+  s.innerHTML = ICONS[name] || '';
+  return s;
+}
+
 const CATEGORIES = [
-  { key: 'chat',       emoji: '💬', label: 'Chat' },
-  { key: 'corpus',     emoji: '🚫', label: 'Corpus' },
-  { key: 'reacciones', emoji: '😀', label: 'Reacciones' },
-  { key: 'frases',     emoji: '✨', label: 'Frases' },
-  { key: 'youtube',    emoji: '📺', label: 'YouTube' },
-  { key: 'memes',      emoji: '😏', label: 'Memes', premium: true },
-  { key: 'gifs',       emoji: '🖼️', label: 'GIFs' },
-  { key: 'premium',    emoji: '⭐', label: 'Premium' },
+  { key: 'chat',       icon: 'chat',    label: 'Chat' },
+  { key: 'corpus',     icon: 'corpus',  label: 'Corpus' },
+  { key: 'reacciones', icon: 'smile',   label: 'Reacciones' },
+  { key: 'frases',     icon: 'sparkle', label: 'Frases' },
+  { key: 'youtube',    icon: 'play',    label: 'YouTube' },
+  { key: 'memes',      icon: 'image',   label: 'Memes', premium: true },
+  { key: 'gifs',       icon: 'film',    label: 'GIFs' },
+  { key: 'premium',    icon: 'star',    label: 'Premium' },
 ];
 
 // Cacheados por la vida de la página.
@@ -189,9 +209,9 @@ function initPanel() {
         }
       },
     },
-      el('span', { class: 'nav-emoji' }, c.emoji),
+      icon(c.icon),
       el('span', { class: 'nav-label' }, c.label),
-      c.premium ? el('span', { class: 'badge nav-label' }, 'PREMIUM') : null));
+      c.premium ? el('span', { class: 'badge badge-premium nav-label' }, 'PREMIUM') : null));
   }
   loadServerHead();
   activate(currentCatFromUrl(), false);
@@ -219,7 +239,9 @@ function activate(key, push) {
   document.querySelectorAll('.nav-item').forEach(n =>
     n.classList.toggle('active', n.dataset.key === key));
   const cat = CATEGORIES.find(c => c.key === key);
-  document.getElementById('catTitle').textContent = cat.emoji + ' ' + cat.label;
+  const title = document.getElementById('catTitle');
+  title.innerHTML = '';
+  title.append(icon(cat.icon), el('span', {}, cat.label));
   if (push) history.pushState({}, '', `/server/${GUILD_ID}/${key}`);
   LOADERS[key]();
 }
