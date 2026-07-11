@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import discord
 from discord import app_commands
@@ -92,14 +92,14 @@ async def resolve_media_url(url: str) -> str | None:
         if "tenor.com" in url:
             resp = await asyncio.to_thread(
                 requests.get,
-                f"https://tenor.com/oembed?url={url}&format=json",
+                f"https://tenor.com/oembed?url={quote(url, safe='')}&format=json",
                 timeout=8,
             )
             return resp.json()["url"]
         if "giphy.com" in url:
             resp = await asyncio.to_thread(
                 requests.get,
-                f"https://giphy.com/services/oembed?url={url}&format=json",
+                f"https://giphy.com/services/oembed?url={quote(url, safe='')}&format=json",
                 timeout=8,
             )
             return resp.json()["thumbnail_url"]

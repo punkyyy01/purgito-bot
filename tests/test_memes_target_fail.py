@@ -7,15 +7,23 @@ discord.TextChannel por la clase fake durante el test (monkeypatch lo restaura).
 """
 
 import asyncio
+import io
 import logging
 from types import SimpleNamespace
 
 import discord
 import pytest
+from PIL import Image
 
 import cogs.memes as memes_mod
 from cogs.memes import Memes
 from config import MEME_MAX_BYTES
+
+
+def _png_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), color="white").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class FakeUser:
@@ -50,8 +58,14 @@ class FakeMessage:
         self.reactions.append(emoji)
 
 
-def _att(filename, size=100):
-    return SimpleNamespace(filename=filename, size=size, url=f"http://cdn/{filename}")
+def _att(filename, size=100, content=None):
+    att = SimpleNamespace(filename=filename, size=size, url=f"http://cdn/{filename}")
+
+    async def read():
+        return content if content is not None else _png_bytes()
+
+    att.read = read
+    return att
 
 
 def _payload():
@@ -122,6 +136,15 @@ def test_duplicate_image(setup):
     _run(cog)
     assert message.reactions == ["❌"]
     assert "ya estaba en el pool" in user.sent[0]
+
+
+def test_fake_image_content_rejected(setup):
+    # Extensión válida pero el contenido no es una imagen real (magic bytes):
+    # debe rechazarse igual que un formato no soportado, no colarse al pool.
+    cog, message, user = setup([_att("foto.png", content=b"esto no es un png")])
+    _run(cog)
+    assert message.reactions == ["❌"]
+    assert "formato no es compatible" in user.sent[0]
 
 
 def test_valid_image_reacts_ok(setup):

@@ -53,6 +53,19 @@ class General(commands.Cog):
     async def on_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
+        if isinstance(error, app_commands.CommandOnCooldown):
+            # No es un error real: avisar el tiempo de espera, sin loguear ni
+            # pisar la respuesta con el mensaje genérico de abajo.
+            msg = f"⏳ Espera {error.retry_after:.0f}s antes de usar este comando de nuevo."
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(msg, ephemeral=True)
+            except (discord.HTTPException, discord.ClientException):
+                pass
+            return
+
         # CommandInvokeError envuelve la excepción real; se desenvuelve para
         # que el traceback del log muestre la causa y no solo el wrapper.
         original = getattr(error, "original", error)

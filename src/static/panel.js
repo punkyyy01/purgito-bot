@@ -132,6 +132,7 @@ const ICONS = {
   image:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
   film:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>',
   star:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+  info:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
 };
 
 function icon(name) {
@@ -549,40 +550,53 @@ async function loadPremium() {
             el('li', {}, 'Colección de memes ampliada a 200 imágenes')))));
       return;
     }
-    box.append(el('div', { class: 'premium-layout' },
-      el('div', { class: 'premium-card premium-card-wide' },
-        el('h2', {}, icon('star'), el('span', {}, 'Activa premium')),
-        el('p', { class: 'dim' },
-          'Desbloquea las funciones premium de Purgito en este servidor. El pago se procesa en Polar y el premium se activa automáticamente al completarlo.'),
-        el('table', { class: 'premium-comparison' },
-          el('thead', {}, el('tr', {},
-            el('th', {}, 'Beneficio'),
-            el('th', {}, 'Free'),
-            el('th', { class: 'premium-column' }, 'Premium'))),
-          el('tbody', {}, premiumRows.map(([benefit, free, premium]) =>
-            el('tr', {},
-              el('th', { scope: 'row' }, benefit),
-              el('td', {}, free),
-              el('td', { class: 'premium-column' }, premium)))))),
-        el('div', { class: 'premium-plans' },
-          el('article', { class: 'premium-plan-card' },
-            el('span', { class: 'premium-plan-badge premium-plan-badge-trial' }, '7 días gratis'),
-            el('div', { class: 'premium-plan-copy' },
-              el('h3', {}, 'Mensual'),
-              el('div', { class: 'premium-plan-price' }, '$4.99', el('span', {}, '/mes')),
-              el('p', { class: 'dim' },
-                'Empieza gratis, sin compromiso — cancela cuando quieras durante la prueba y no se te cobra nada.'),
-              el('p', { class: 'premium-plan-fineprint' },
-                'La prueba gratis aplica una vez por cliente (mismo comprador o método de pago), aunque la actives en otro servidor.')),
-            checkoutBtn(box, 'monthly', 'Empezar prueba gratis — 7 días')),
-          el('article', { class: 'premium-plan-card premium-plan-featured' },
-            el('span', { class: 'premium-plan-badge' }, 'Ahorra ~33%'),
-            el('span', { class: 'premium-plan-recommended' }, 'Recomendado'),
-            el('div', { class: 'premium-plan-copy' },
-              el('h3', {}, 'Anual'),
-              el('div', { class: 'premium-plan-price' }, '$39.99', el('span', {}, '/año')),
-              el('p', { class: 'dim' }, 'La mejor opción: pagas una vez y ahorras ~33% frente a 12 meses sueltos.')),
-            checkoutBtn(box, 'annual', 'Suscribirse — Anual $39.99/año')))));
+    const cardWide = el('div', { class: 'premium-card premium-card-wide' },
+      el('h2', {}, icon('star'), el('span', {}, 'Activa premium')),
+      el('p', { class: 'dim' },
+        'Desbloquea las funciones premium de Purgito en este servidor. El pago se procesa en Polar y el premium se activa automáticamente al completarlo.'),
+      el('table', { class: 'premium-comparison' },
+        el('thead', {}, el('tr', {},
+          el('th', {}, 'Beneficio'),
+          el('th', {}, 'Free'),
+          el('th', { class: 'premium-column' }, 'Premium'))),
+        el('tbody', {}, premiumRows.map(([benefit, free, premium]) =>
+          el('tr', {},
+            el('th', { scope: 'row' }, benefit),
+            el('td', {}, free),
+            el('td', { class: 'premium-column' }, premium))))),
+      el('div', { class: 'premium-plans' },
+        el('article', { class: 'premium-plan-card' },
+          el('span', { class: 'premium-plan-badge premium-plan-badge-trial' }, '7 días gratis'),
+          el('div', { class: 'premium-plan-copy' },
+            el('h3', {}, 'Mensual'),
+            el('div', { class: 'premium-plan-price' }, '$4.99', el('span', {}, '/mes')),
+            el('p', { class: 'dim' },
+              'Empieza gratis, sin compromiso — cancela cuando quieras durante la prueba y no se te cobra nada.'),
+            el('p', { class: 'premium-plan-fineprint' },
+              'La prueba gratis aplica una vez por cliente (mismo comprador o método de pago), aunque la actives en otro servidor.')),
+          checkoutBtn(box, 'monthly', 'Empezar prueba gratis — 7 días')),
+        el('article', { class: 'premium-plan-card premium-plan-featured' },
+          el('span', { class: 'premium-plan-badge' }, 'Ahorra ~33%'),
+          el('span', { class: 'premium-plan-recommended' }, 'Recomendado'),
+          el('div', { class: 'premium-plan-copy' },
+            el('h3', {}, 'Anual'),
+            el('div', { class: 'premium-plan-price' }, '$39.99', el('span', {}, '/año')),
+            el('p', { class: 'dim' }, 'La mejor opción: pagas una vez y ahorras ~33% frente a 12 meses sueltos.')),
+          checkoutBtn(box, 'annual', 'Suscribirse — Anual $39.99/año'))));
+
+    // Nota discreta: no compite por atención con las tarjetas de precio de arriba.
+    const cancelNote = el('div', { class: 'premium-note' },
+      icon('info'),
+      el('div', { class: 'premium-note-body' },
+        el('h3', {}, '¿Cómo cancelo o gestiono mi suscripción?'),
+        el('p', {},
+          'El pago se procesa a través de Polar, nuestro proveedor de pagos (Merchant of Record) — la suscripción se gestiona ahí, no en este dashboard.'),
+        el('p', {},
+          'Al suscribirte, Polar te envía un correo de confirmación (no Purgito) con un link a tu portal de cliente. Desde ahí puedes cancelar la suscripción, cambiar de plan (mensual ↔ anual) o ver tus recibos, cuando quieras. Si no lo encuentras, revisa spam o promociones.'),
+        el('p', {},
+          'Cancelar no corta el acceso al tiro: el premium sigue activo hasta el final del período ya pagado, y simplemente no se renueva después.')));
+
+    box.append(el('div', { class: 'premium-layout' }, cardWide, cancelNote));
   } catch (e) { renderError(box, e); }
 }
 

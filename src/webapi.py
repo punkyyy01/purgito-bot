@@ -222,7 +222,13 @@ async def check_guild_access(
 
 
 def guild_api(handler):
-    """Handler de API por guild: exige login + manage_guild y pasa guild_id ya validado."""
+    """Handler de API por guild: exige login + manage_guild + que el bot esté
+    en ese guild, y pasa guild_id ya validado.
+
+    Sin el chequeo de presencia, un usuario podía escribir settings/premium
+    para un guild_id que administra pero donde el bot no está instalado (el
+    frontend nunca ofrece ese link — /servers solo linkea a /server/{id} para
+    guilds "configured" — pero la API igual lo aceptaba)."""
 
     async def wrapper(request: web.Request) -> web.StreamResponse:
         session = await get_session(request)
@@ -235,6 +241,10 @@ def guild_api(handler):
         denied = await check_guild_access(request, guild_id)
         if denied is not None:
             return denied
+        if _bot_guild(request, guild_id) is None:
+            return web.json_response(
+                {"error": "el bot no está en ese servidor"}, status=404
+            )
         return await handler(request, guild_id)
 
     return wrapper
@@ -300,7 +310,13 @@ async def _api_gif_list(request: web.Request) -> web.Response:
 
 
 async def _api_gif_add(request: web.Request) -> web.Response:
-    # Endpoint legacy: opera sobre PURG4TORY.
+    # Endpoint legacy: opera sobre PURG4TORY. Igual que el DELETE de abajo,
+    # estar logueado no alcanza: hay que poder administrar PURG4TORY, si no
+    # cualquier usuario de Discord (de cualquier servidor) podría sumar GIFs
+    # al pool compartido.
+    denied = await check_guild_access(request, PURGATORY_GUILD_ID)
+    if denied is not None:
+        return denied
     return await _gif_add_impl(request, PURGATORY_GUILD_ID)
 
 
@@ -409,7 +425,7 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     manage_ids = {int(g["id"]) for g in manage}
     bot_guild_ids = {g.id for g in request.app["bot"].guilds}
     # debug temporal: diagnóstico de no_guilds y de pérdida de sesión post-login.
-    log.info(
+    log.debug(
         "OAuth callback user=%s: user_guilds=%d, manage_ids=%s, bot_guild_ids=%s, "
         "intersección=%s",
         user["id"],
@@ -567,11 +583,8 @@ async def _api_me_guilds(request: web.Request) -> web.Response:
 
 @guild_api
 async def _api_channels(request: web.Request, guild_id: int) -> web.Response:
+    # guild_api ya garantiza que el bot está en el guild.
     guild = _bot_guild(request, guild_id)
-    if guild is None:
-        return web.json_response(
-            {"error": "el bot no está en ese servidor"}, status=404
-        )
     channels = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
     return web.json_response({"channels": channels})
 
@@ -579,10 +592,6 @@ async def _api_channels(request: web.Request, guild_id: int) -> web.Response:
 @guild_api
 async def _api_roles(request: web.Request, guild_id: int) -> web.Response:
     guild = _bot_guild(request, guild_id)
-    if guild is None:
-        return web.json_response(
-            {"error": "el bot no está en ese servidor"}, status=404
-        )
     roles = [
         {"id": str(r.id), "name": r.name, "color": f"#{r.colour.value:06x}"}
         for r in guild.roles
@@ -1094,12 +1103,12 @@ async def _log_auth_set_cookie(
         return
     cookies = response.headers.getall("Set-Cookie", [])
     if not cookies:
-        log.info("Respuesta %s %s SIN Set-Cookie", response.status, request.path)
+        log.debug("Respuesta %s %s SIN Set-Cookie", response.status, request.path)
         return
     for c in cookies:
         name = c.split("=", 1)[0]
         attrs = c.partition(";")[2].strip()
-        log.info(
+        log.debug(
             "Respuesta %s %s Set-Cookie: %s=<cifrado>; %s",
             response.status,
             request.path,

@@ -11,6 +11,19 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FONT_PATH = os.path.join(_BASE_DIR, "assets", "Impact.ttf")
 
 
+def is_valid_image(data: bytes) -> bool:
+    """Verifica que los bytes sean una imagen real (no solo por extensión)
+    antes de persistirlos: Image.verify() decodifica el header y rechaza
+    contenido corrupto o que no sea una imagen. MAX_IMAGE_PIXELS (arriba)
+    también aplica acá, así que un decompression bomb también cae."""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+        return True
+    except Exception:
+        return False
+
+
 def _try_short_sentence(model, max_chars: int = 80, tries: int = 100) -> str | None:
     import re
 

@@ -467,6 +467,30 @@ h1 {
   background: var(--premium);
 }
 
+/* Nota discreta de cancelación/gestión: deliberadamente subordinada a las
+   tarjetas de precio de arriba, no un card con el mismo peso visual. */
+.premium-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.premium-note .nav-icon { width: 16px; height: 16px; margin-top: 1px; opacity: 0.75; }
+.premium-note .nav-icon svg { width: 16px; height: 16px; }
+.premium-note-body { min-width: 0; }
+.premium-note-body h3 {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.premium-note-body p { margin: 0 0 6px; }
+.premium-note-body p:last-child { margin-bottom: 0; }
+
 .gif-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -527,4 +551,5 @@ h1 {
   .premium-comparison th,
   .premium-comparison td { padding: 10px 12px; }
   .premium-plan-price { font-size: 26px; }
+  .premium-note { font-size: 11.5px; gap: 8px; }
 }

@@ -256,6 +256,7 @@ class Musica(commands.Cog):
     @app_commands.describe(
         query="Nombre de la canción, artista, o URL de YouTube/SoundCloud"
     )
+    @app_commands.checks.cooldown(2, 10.0, key=lambda i: (i.guild_id, i.user.id))
     async def play(self, interaction: discord.Interaction, query: str):
         vc, err = _voice_check(interaction)
         if err:

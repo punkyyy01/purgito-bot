@@ -105,18 +105,14 @@ def upload_gif_sync(url: str, guild_id: int) -> str | None:
         return None
 
 
-def upload_image_sync(url: str, guild_id: int, ext: str) -> str | None:
+def upload_image_bytes_sync(url: str, data: bytes, guild_id: int, ext: str) -> str | None:
+    """Sube bytes ya descargados (y validados como imagen real por el caller);
+    `url` solo se usa para derivar la key y para los logs de error."""
     client = get_client()
     if client is None:
         return None
     content_type = _IMAGE_CONTENT_TYPES.get(ext.lower(), "image/png")
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            log.error("HTTP %s al descargar imagen para R2: %s", resp.status_code, url)
-            return None
-        data = resp.content
         key = f"{guild_id}/{hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()}{ext}"
         client.put_object(
             Bucket=_bucket(),

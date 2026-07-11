@@ -24,7 +24,7 @@ from db import (
     update_meme_last_posted,
 )
 from generation import build_markov_model
-from meme_generator import _try_short_sentence, render_caption
+from meme_generator import _try_short_sentence, is_valid_image, render_caption
 from utils import LRUDict
 
 log = logging.getLogger(__name__)
@@ -36,6 +36,21 @@ _groq_cooldowns: LRUDict = LRUDict(256)
 _last_meme_image: LRUDict = LRUDict(256)
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+_MEME_COOLDOWN_SECONDS = 45
+
+
+def _check_meme_cooldown(guild_id: int, user_id: int) -> int | None:
+    """None si puede generar un meme (y marca el cooldown); si no, segundos
+    restantes. Compartido por /momo y por el trigger de texto ("generar"),
+    así spamear replies no evade el límite de /momo."""
+    now = time.time()
+    key = (guild_id, user_id)
+    elapsed = now - _momo_cooldowns.get(key, 0)
+    if elapsed < _MEME_COOLDOWN_SECONDS:
+        return int(_MEME_COOLDOWN_SECONDS - elapsed)
+    _momo_cooldowns[key] = now
+    return None
 
 
 def is_meme_trigger(bot: commands.Bot, message: discord.Message) -> bool:
@@ -201,6 +216,14 @@ async def handle_meme_command(message: discord.Message) -> None:
             await message.reply(premium_required_message())
         except Exception:
             log.debug("No se pudo avisar el gate de premium", exc_info=True)
+        return
+
+    # Cooldown por usuario: sin esto, spamear replies "artemis generar" fuerza
+    # renders de Pillow (y, cada 10s por guild, llamadas a Groq) sin límite.
+    # Silencioso a propósito: responder "espera X segundos" en cada intento de
+    # spam sería, en sí mismo, otra forma de ruido en el canal.
+    if _check_meme_cooldown(message.guild.id, message.author.id) is not None:
+        log.debug("handle_meme_command: cooldown activo, ignorando")
         return
 
     log.info(
@@ -388,9 +411,28 @@ class Memes(commands.Cog):
                 oversized = True
                 continue
             try:
+                img_bytes = await attachment.read()
+            except Exception:
+                save_error = True
+                log.exception(
+                    "Error descargando adjunto para el pool de memes: %s",
+                    attachment.url,
+                )
+                continue
+            # La extensión sola no garantiza que el contenido sea una imagen
+            # real: sin esto, cualquier archivo con extensión .png/.jpg entra
+            # al pool y termina abriéndose con Pillow al generar un meme.
+            if not is_valid_image(img_bytes):
+                unsupported = True
+                continue
+            try:
                 if r2.available():
                     final_url = await asyncio.to_thread(
-                        r2.upload_image_sync, attachment.url, payload.guild_id, ext
+                        r2.upload_image_bytes_sync,
+                        attachment.url,
+                        img_bytes,
+                        payload.guild_id,
+                        ext,
                     )
                     if not final_url:
                         log.warning(
@@ -490,17 +532,13 @@ class Memes(commands.Cog):
                 premium_required_message(), ephemeral=True
             )
             return
-        now = time.time()
-        cooldown_key = (interaction.guild_id or 0, interaction.user.id)
-        last = _momo_cooldowns.get(cooldown_key, 0)
-        if now - last < 45:
-            remaining = int(45 - (now - last))
+        remaining = _check_meme_cooldown(interaction.guild_id or 0, interaction.user.id)
+        if remaining is not None:
             await interaction.response.send_message(
                 f"espera {remaining} segundos antes de generar otro meme",
                 ephemeral=True,
             )
             return
-        _momo_cooldowns[cooldown_key] = now
 
         await interaction.response.defer()
 
