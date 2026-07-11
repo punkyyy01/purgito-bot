@@ -2,8 +2,11 @@ import os
 import re
 import asyncio
 import logging
+from datetime import datetime, timezone
+
 import aiosqlite
 
+import config
 import r2
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -110,6 +113,21 @@ CREATE TABLE IF NOT EXISTS meme_schedule (
     last_posted_at TEXT,
     PRIMARY KEY (guild_id, channel_id)
 );
+
+CREATE TABLE IF NOT EXISTS scheduled_announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    interval_minutes INTEGER,
+    hour INTEGER,
+    minute INTEGER,
+    last_sent_at TEXT,
+    created_by INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_announcements_guild ON scheduled_announcements(guild_id);
 
 CREATE TABLE IF NOT EXISTS corpus_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -855,6 +873,147 @@ async def update_meme_last_posted(guild_id: int, channel_id: int) -> None:
         await db.commit()
 
 
+async def add_scheduled_announcement(
+    guild_id: int,
+    channel_id: int,
+    message: str,
+    mode: str,
+    created_by: int,
+    interval_minutes: int | None = None,
+    hour: int | None = None,
+    minute: int | None = None,
+) -> int | None:
+    """Crea un anuncio programado. Devuelve el id insertado, o None si el guild
+    ya llegó al límite de anuncios (a diferencia de gifs/imágenes, acá no se
+    evictan anuncios viejos: el admin tiene que borrar uno a mano primero)."""
+    max_announcements = _limit_for_guild(
+        guild_id,
+        "MAX_ANNOUNCEMENTS_PER_GUILD_FREE",
+        "MAX_ANNOUNCEMENTS_PER_GUILD_PREMIUM",
+        3,
+        10,
+    )
+    db = await get_db()
+    async with _db_lock:
+        async with db.execute(
+            "SELECT COUNT(*) FROM scheduled_announcements WHERE guild_id=?",
+            (guild_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and int(row[0]) >= max_announcements:
+            return None
+        cursor = await db.execute(
+            "INSERT INTO scheduled_announcements "
+            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                guild_id,
+                channel_id,
+                message,
+                mode,
+                interval_minutes,
+                hour,
+                minute,
+                created_by,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def remove_scheduled_announcement(guild_id: int, announcement_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM scheduled_announcements WHERE guild_id=? AND id=?",
+            (guild_id, announcement_id),
+        )
+        removed = cursor.rowcount > 0
+        await db.commit()
+    return removed
+
+
+async def list_scheduled_announcements(guild_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, channel_id, message, mode, interval_minutes, hour, minute, "
+        "last_sent_at, created_by, created_at "
+        "FROM scheduled_announcements WHERE guild_id=? ORDER BY id",
+        (guild_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "channel_id": r[1],
+            "message": r[2],
+            "mode": r[3],
+            "interval_minutes": r[4],
+            "hour": r[5],
+            "minute": r[6],
+            "last_sent_at": r[7],
+            "created_by": r[8],
+            "created_at": r[9],
+        }
+        for r in rows
+    ]
+
+
+async def get_due_scheduled_announcements() -> list[dict]:
+    """Anuncios listos para enviarse. El modo interval se resuelve en SQL;
+    el modo daily se evalúa acá en Python contra la timezone configurada,
+    porque hay que comparar hora:minuto y la FECHA local (no solo un delta)."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at "
+        "FROM scheduled_announcements "
+        "WHERE (mode='interval' AND (last_sent_at IS NULL "
+        "       OR datetime(last_sent_at, '+' || interval_minutes || ' minutes') <= datetime('now'))) "
+        "   OR mode='daily'"
+    ) as cursor:
+        rows = await cursor.fetchall()
+
+    now_local = datetime.now(config.ANNOUNCEMENTS_TIMEZONE)
+    due = []
+    for r in rows:
+        item = {
+            "id": r[0],
+            "guild_id": r[1],
+            "channel_id": r[2],
+            "message": r[3],
+            "mode": r[4],
+            "interval_minutes": r[5],
+            "hour": r[6],
+            "minute": r[7],
+            "last_sent_at": r[8],
+        }
+        if item["mode"] == "interval":
+            due.append(item)
+            continue
+        if (now_local.hour, now_local.minute) < (item["hour"], item["minute"]):
+            continue
+        if item["last_sent_at"]:
+            last_local = (
+                datetime.strptime(item["last_sent_at"], "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=timezone.utc)
+                .astimezone(config.ANNOUNCEMENTS_TIMEZONE)
+            )
+            if last_local.date() == now_local.date():
+                continue
+        due.append(item)
+    return due
+
+
+async def update_announcement_last_sent(announcement_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "UPDATE scheduled_announcements SET last_sent_at = datetime('now') WHERE id=?",
+            (announcement_id,),
+        )
+        await db.commit()
+
+
 async def save_image_url(guild_id: int, url: str) -> bool:
     u = (url or "").strip()
     if not u:
@@ -1254,6 +1413,7 @@ async def purge_guild_data(guild_id: int) -> None:
         "youtube_subscriptions",
         "ignored_channels",
         "meme_schedule",
+        "scheduled_announcements",
         "frases_especiales",
         "reaction_pool",
         "premium_guilds",

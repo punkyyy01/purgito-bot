@@ -7,6 +7,7 @@ config antes que cualquier otro módulo propio.
 
 import logging
 import os
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -61,6 +62,9 @@ AUTO_GENERATE_EVERY = 15
 AUTO_GENERATE_PROBABILITY = float(os.getenv("AUTO_GENERATE_PROBABILITY", "0.6"))
 
 MEME_MAX_BYTES = 10 * 1024 * 1024
+
+# Timezone para los anuncios programados en modo "hora fija" (cogs/anuncios.py).
+ANNOUNCEMENTS_TIMEZONE = ZoneInfo(os.getenv("ANNOUNCEMENTS_TIMEZONE", "America/Santiago"))
 
 # --- Dashboard web (Discord OAuth2) ---
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")

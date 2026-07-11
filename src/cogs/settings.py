@@ -10,6 +10,7 @@ El sistema de navegación no necesita cambios.
 """
 
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -26,6 +27,7 @@ from db import (
     count_guild_corpus_messages,
     add_meme_schedule,
     add_reaction_to_pool,
+    add_scheduled_announcement,
     add_youtube_sub,
     delete_frase_especial,
     get_chat_settings,
@@ -33,12 +35,14 @@ from db import (
     list_ignored_channels,
     list_meme_schedules,
     list_reaction_pool,
+    list_scheduled_announcements,
     list_youtube_subs,
     mark_auto_refeed_completed,
     mark_auto_refeed_triggered,
     remove_ignored_channel,
     remove_meme_schedule,
     remove_reaction_from_pool,
+    remove_scheduled_announcement,
     remove_youtube_sub,
     set_chat_mode,
     set_youtube_mention_role,
@@ -52,6 +56,8 @@ from i18n import t
 log = logging.getLogger(__name__)
 
 PURGITO_COLOR = 0x8B00FF
+
+_HOUR_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
 # ─── Infraestructura del panel ───────────────────────────────────────────────
@@ -854,6 +860,202 @@ class MemesCategory(SettingsCategory):
         return items
 
 
+class AnunciosCategory(SettingsCategory):
+    key = "anuncios"
+    emoji = "📢"
+
+    async def build_embed(self, panel: SettingsPanel) -> discord.Embed:
+        anuncios = await list_scheduled_announcements(panel.guild.id)
+        body = t("settings.anuncios.body", panel.locale)
+        if anuncios:
+            lines = []
+            for a in anuncios:
+                preview = a["message"][:60]
+                if len(a["message"]) > 60:
+                    preview += "…"
+                if a["mode"] == "interval":
+                    mode_text = t(
+                        "settings.anuncios.entry_interval",
+                        panel.locale,
+                        minutes=a["interval_minutes"],
+                    )
+                else:
+                    mode_text = t(
+                        "settings.anuncios.entry_daily",
+                        panel.locale,
+                        time=f"{a['hour']:02d}:{a['minute']:02d}",
+                    )
+                lines.append(f"• <#{a['channel_id']}> — {mode_text} — \"{preview}\"")
+            body += "\n\n" + "\n".join(lines)
+        else:
+            body += "\n\n" + t("settings.anuncios.none", panel.locale)
+        if getattr(panel, "anuncio_pending", None):
+            body += "\n\n" + t("settings.anuncios.activate_pending_hint", panel.locale)
+        if getattr(panel, "anuncio_limit_error", False):
+            body += "\n\n" + t("settings.anuncios.limit_reached", panel.locale)
+            panel.anuncio_limit_error = False
+        return discord.Embed(
+            title=self.title(panel.locale), description=body[:4000], color=PURGITO_COLOR
+        )
+
+    async def build_items(self, panel: SettingsPanel) -> list[discord.ui.Item]:
+        anuncios = await list_scheduled_announcements(panel.guild.id)
+        items: list[discord.ui.Item] = []
+
+        if anuncios:
+            remove_select = discord.ui.Select(
+                placeholder=t("settings.anuncios.remove_placeholder", panel.locale),
+                options=[
+                    discord.SelectOption(
+                        label=(
+                            f"#{getattr(panel.guild.get_channel(a['channel_id']), 'name', a['channel_id'])} "
+                            f"— {a['message'][:40]}"
+                        )[:100],
+                        value=str(a["id"]),
+                    )
+                    for a in anuncios[:25]
+                ],
+                row=1,
+            )
+
+            async def on_remove(interaction: discord.Interaction):
+                await remove_scheduled_announcement(
+                    panel.guild.id, int(remove_select.values[0])
+                )
+                await panel.refresh(interaction)
+
+            remove_select.callback = on_remove
+            items.append(remove_select)
+
+        pending: dict | None = getattr(panel, "anuncio_pending", None)
+        if pending:
+            channel_select = discord.ui.ChannelSelect(
+                channel_types=[discord.ChannelType.text],
+                placeholder=t(
+                    "settings.anuncios.activate_channel_placeholder", panel.locale
+                ),
+                row=2,
+            )
+
+            async def on_channel(interaction: discord.Interaction):
+                new_id = await add_scheduled_announcement(
+                    panel.guild.id,
+                    channel_select.values[0].id,
+                    pending["message"],
+                    pending["mode"],
+                    panel.invoker_id,
+                    interval_minutes=pending.get("interval_minutes"),
+                    hour=pending.get("hour"),
+                    minute=pending.get("minute"),
+                )
+                panel.anuncio_pending = None
+                if new_id is None:
+                    panel.anuncio_limit_error = True
+                await panel.refresh(interaction)
+
+            channel_select.callback = on_channel
+            items.append(channel_select)
+        else:
+            add_interval_btn = discord.ui.Button(
+                label=t("settings.anuncios.btn_add_interval", panel.locale),
+                style=discord.ButtonStyle.primary,
+                row=2,
+            )
+
+            class IntervalModal(discord.ui.Modal):
+                def __init__(self):
+                    super().__init__(
+                        title=t("settings.anuncios.modal_title_interval", panel.locale)
+                    )
+                    self.message_input = discord.ui.TextInput(
+                        label=t("settings.anuncios.modal_field_message", panel.locale)[
+                            :45
+                        ],
+                        style=discord.TextStyle.paragraph,
+                        max_length=500,
+                    )
+                    self.interval_input = discord.ui.TextInput(
+                        label=t(
+                            "settings.anuncios.modal_field_interval", panel.locale
+                        )[:45],
+                        max_length=4,
+                    )
+                    self.add_item(self.message_input)
+                    self.add_item(self.interval_input)
+
+                async def on_submit(self, interaction: discord.Interaction):
+                    raw = self.interval_input.value.strip()
+                    if not raw.isdigit() or not (5 <= int(raw) <= 1440):
+                        await interaction.response.send_message(
+                            t("settings.anuncios.invalid_interval", panel.locale),
+                            ephemeral=True,
+                        )
+                        return
+                    panel.anuncio_pending = {
+                        "message": self.message_input.value.strip(),
+                        "mode": "interval",
+                        "interval_minutes": int(raw),
+                    }
+                    await panel.refresh(interaction)
+
+            async def on_add_interval(interaction: discord.Interaction):
+                await interaction.response.send_modal(IntervalModal())
+
+            add_interval_btn.callback = on_add_interval
+            items.append(add_interval_btn)
+
+            add_daily_btn = discord.ui.Button(
+                label=t("settings.anuncios.btn_add_daily", panel.locale),
+                style=discord.ButtonStyle.primary,
+                row=2,
+            )
+
+            class DailyModal(discord.ui.Modal):
+                def __init__(self):
+                    super().__init__(
+                        title=t("settings.anuncios.modal_title_daily", panel.locale)
+                    )
+                    self.message_input = discord.ui.TextInput(
+                        label=t("settings.anuncios.modal_field_message", panel.locale)[
+                            :45
+                        ],
+                        style=discord.TextStyle.paragraph,
+                        max_length=500,
+                    )
+                    self.hour_input = discord.ui.TextInput(
+                        label=t("settings.anuncios.modal_field_hour", panel.locale)[
+                            :45
+                        ],
+                        max_length=5,
+                    )
+                    self.add_item(self.message_input)
+                    self.add_item(self.hour_input)
+
+                async def on_submit(self, interaction: discord.Interaction):
+                    match = _HOUR_RE.match(self.hour_input.value.strip())
+                    if not match:
+                        await interaction.response.send_message(
+                            t("settings.anuncios.invalid_hour", panel.locale),
+                            ephemeral=True,
+                        )
+                        return
+                    panel.anuncio_pending = {
+                        "message": self.message_input.value.strip(),
+                        "mode": "daily",
+                        "hour": int(match.group(1)),
+                        "minute": int(match.group(2)),
+                    }
+                    await panel.refresh(interaction)
+
+            async def on_add_daily(interaction: discord.Interaction):
+                await interaction.response.send_modal(DailyModal())
+
+            add_daily_btn.callback = on_add_daily
+            items.append(add_daily_btn)
+
+        return items
+
+
 # Registro de categorías: agregar aquí las nuevas (orden = orden en el menú).
 CATEGORIES: list[SettingsCategory] = [
     IdiomaCategory(),
@@ -863,6 +1065,7 @@ CATEGORIES: list[SettingsCategory] = [
     FrasesCategory(),
     YouTubeCategory(),
     MemesCategory(),
+    AnunciosCategory(),
 ]
 
 
