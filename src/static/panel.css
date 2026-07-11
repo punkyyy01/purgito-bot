@@ -406,6 +406,18 @@ h1 {
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
+.premium-plan-badge-trial {
+  right: auto;
+  left: 18px;
+  background: var(--success);
+  color: #06210f;
+}
+.premium-plan-fineprint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
 .premium-plan-recommended {
   align-self: flex-start;
   font-size: 11px;

@@ -940,6 +940,19 @@ _polar: Polar | None = (
 
 _POLAR_ACTIVATE = ("subscription.active", "subscription.resumed")
 _POLAR_DEACTIVATE = ("subscription.paused", "subscription.revoked")
+# subscription.created dispara con status "trialing" cuando el producto tiene
+# free trial (confirmado en polar_sdk.models.subscriptionstatus.SubscriptionStatus
+# y en el docstring de WebhookSubscriptionCreatedPayload: "the subscription
+# status might not be active yet, as we can still have to wait for the first
+# payment"). Sin esto, alguien que arranca un trial no tiene premium hasta que
+# Polar cobra el primer pago una semana después — justo lo que rompe el trial.
+# subscription.active ya cubre tanto altas sin trial como la conversión
+# trial→pago (dispara de nuevo al terminar el trial); set_premium es
+# idempotente (INSERT OR IGNORE), así que no hace falta lógica extra para
+# evitar duplicados ahí. subscription.revoked ya cubre "trial terminó sin
+# método de pago válido": Polar pasa por past_due y agota reintentos antes de
+# revocar, no hay un evento aparte para ese caso.
+_POLAR_TRIAL_STATUS = "trialing"
 
 
 def _polar_plan_note(product_id) -> str:
@@ -1009,6 +1022,7 @@ async def _webhook_polar(request: web.Request) -> web.Response:
         event_type = event.TYPE
         metadata = getattr(event.data, "metadata", None) or {}
         product_id = getattr(event.data, "product_id", None)
+        status = getattr(event.data, "status", None)
     except WebhookVerificationError:
         log.warning(
             "Webhook de Polar con firma inválida desde %s "
@@ -1025,9 +1039,17 @@ async def _webhook_polar(request: web.Request) -> web.Response:
         data = payload.get("data") or {}
         metadata = data.get("metadata") or {}
         product_id = data.get("product_id")
+        status = data.get("status")
 
-    if event_type not in _POLAR_ACTIVATE + _POLAR_DEACTIVATE:
-        log.debug("Webhook de Polar ignorado: %s", event_type)
+    # subscription.created con status "trialing" = arrancó un free trial:
+    # cuenta como alta igual que subscription.active (ver comentario en
+    # _POLAR_TRIAL_STATUS más arriba).
+    is_trial_start = (
+        event_type == "subscription.created" and status == _POLAR_TRIAL_STATUS
+    )
+
+    if event_type not in _POLAR_ACTIVATE + _POLAR_DEACTIVATE and not is_trial_start:
+        log.debug("Webhook de Polar ignorado: %s (status=%s)", event_type, status)
         return web.json_response({"ok": True})
 
     guild_id = _to_int(metadata.get("guild_id") if isinstance(metadata, dict) else None)
@@ -1035,10 +1057,23 @@ async def _webhook_polar(request: web.Request) -> web.Response:
         log.warning("Webhook de Polar %s sin guild_id válido en metadata", event_type)
         return web.json_response({"ok": True})
 
-    if event_type in _POLAR_ACTIVATE:
+    if event_type in _POLAR_ACTIVATE or is_trial_start:
         note = _polar_plan_note(product_id)
-        await set_premium(guild_id, note)
-        log.info("Premium activado por Polar para guild %s (%s)", guild_id, note)
+        reason = "trial" if is_trial_start else "pago confirmado"
+        was_new = await set_premium(guild_id, note)
+        if was_new:
+            log.info(
+                "Premium activado por Polar para guild %s (%s, %s)",
+                guild_id, note, reason,
+            )
+        else:
+            # Ya estaba premium (ej: subscription.active llega después de que
+            # subscription.created ya activó el trial) — set_premium es
+            # idempotente (INSERT OR IGNORE), no hay nada nuevo que reportar.
+            log.debug(
+                "Webhook de Polar %s (%s) para guild %s: ya estaba premium, sin cambios",
+                event_type, reason, guild_id,
+            )
     else:
         await unset_premium(guild_id)
         log.info(

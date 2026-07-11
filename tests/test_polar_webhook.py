@@ -42,19 +42,29 @@ def _signed_headers(body: str) -> dict:
     }
 
 
-def _fake_event(event_type: str, metadata, product_id: str = MONTHLY):
+def _fake_event(event_type: str, metadata, product_id: str = MONTHLY, status=None):
     return SimpleNamespace(
-        TYPE=event_type, data=SimpleNamespace(metadata=metadata, product_id=product_id)
+        TYPE=event_type,
+        data=SimpleNamespace(metadata=metadata, product_id=product_id, status=status),
     )
 
 
-def _run(monkeypatch, request: FakeRequest, fake_event=None, raise_verification=False):
-    """Ejecuta el handler con set/unset espiados; retorna (response, calls)."""
+def _run(
+    monkeypatch,
+    request: FakeRequest,
+    fake_event=None,
+    raise_verification=False,
+    set_returns=True,
+):
+    """Ejecuta el handler con set/unset espiados; retorna (response, calls).
+
+    set_returns controla lo que devuelve set_premium (True = alta nueva, False =
+    ya era premium), para ejercitar la rama idempotente del handler."""
     calls = {"set": [], "unset": []}
 
     async def fake_set(guild_id, note=None):
         calls["set"].append((guild_id, note))
-        return True
+        return set_returns
 
     async def fake_unset(guild_id):
         calls["unset"].append(guild_id)
@@ -91,6 +101,57 @@ def test_active_annual_note(monkeypatch):
     event = _fake_event("subscription.active", {"guild_id": "123"}, ANNUAL)
     resp, calls = _run(monkeypatch, FakeRequest(b"{}"), fake_event=event)
     assert calls["set"] == [(123, "Polar — anual")]
+
+
+def test_created_trialing_sets_premium(monkeypatch):
+    # El caso que motivó este cambio: con free trial configurado en Polar,
+    # subscription.active recién llega al terminar el trial — subscription.created
+    # con status "trialing" es lo único que avisa que el trial arrancó.
+    event = _fake_event(
+        "subscription.created", {"guild_id": "123"}, MONTHLY, status="trialing"
+    )
+    resp, calls = _run(monkeypatch, FakeRequest(b"{}"), fake_event=event)
+    assert resp.status == 200
+    assert calls["set"] == [(123, "Polar — mensual")]
+    assert calls["unset"] == []
+
+
+def test_created_incomplete_is_ignored(monkeypatch):
+    # subscription.created también dispara con status "incomplete" mientras se
+    # procesa el primer pago (sin trial): no debe activar premium todavía.
+    event = _fake_event(
+        "subscription.created", {"guild_id": "123"}, MONTHLY, status="incomplete"
+    )
+    resp, calls = _run(monkeypatch, FakeRequest(b"{}"), fake_event=event)
+    assert resp.status == 200
+    assert calls["set"] == [] and calls["unset"] == []
+
+
+def test_created_already_active_status_is_ignored(monkeypatch):
+    # Si subscription.created llegara con status "active" (pago inmediato sin
+    # trial), no la tratamos como alta acá: subscription.active se encarga.
+    event = _fake_event(
+        "subscription.created", {"guild_id": "123"}, MONTHLY, status="active"
+    )
+    resp, calls = _run(monkeypatch, FakeRequest(b"{}"), fake_event=event)
+    assert resp.status == 200
+    assert calls["set"] == [] and calls["unset"] == []
+
+
+def test_active_after_trial_is_idempotent(monkeypatch, caplog):
+    # Fin del trial: subscription.active llega para una suscripción que
+    # subscription.created ya había activado. set_premium (INSERT OR IGNORE)
+    # devuelve False; el handler debe seguir llamándola (sin romper nada) pero
+    # loguear como "sin cambios", no como una activación nueva.
+    event = _fake_event("subscription.active", {"guild_id": "123"}, MONTHLY)
+    with caplog.at_level("DEBUG", logger="webapi"):
+        resp, calls = _run(
+            monkeypatch, FakeRequest(b"{}"), fake_event=event, set_returns=False
+        )
+    assert resp.status == 200
+    assert calls["set"] == [(123, "Polar — mensual")]
+    assert not [r for r in caplog.records if "activado" in r.getMessage().lower()]
+    assert any("sin cambios" in r.getMessage() for r in caplog.records)
 
 
 def test_revoked_unsets_premium(monkeypatch):
