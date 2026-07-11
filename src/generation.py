@@ -18,6 +18,7 @@ from db import (
     get_random_frase_especial,
     get_user_messages,
     trim_corpus_if_needed,
+    trim_guild_total_if_needed,
     trim_user_corpus_if_needed,
 )
 from i18n import t
@@ -43,6 +44,12 @@ _CONECTORES_FINALES = [
 _markov_cache: LRUDict = LRUDict(64)
 _message_counter: LRUDict = LRUDict(256)
 _corpus_insert_counter: LRUDict = LRUDict(256)
+_guild_total_insert_counter: LRUDict = LRUDict(256)
+# 10x el umbral por canal (50): trim_guild_total_if_needed hace un GROUP BY
+# sobre todos los canales del guild, más caro que el COUNT de un solo canal
+# — se dispara con menos frecuencia porque es una red de seguridad, no el
+# mecanismo principal (ese es trim_corpus_if_needed, por canal).
+_GUILD_TOTAL_TRIM_EVERY = 500
 _user_markov_cache: LRUDict = LRUDict(64)
 _user_corpus_insert_counter: LRUDict = LRUDict(256)
 _special_phrase_cooldowns: LRUDict = LRUDict(256)
@@ -142,6 +149,13 @@ def note_corpus_insert(guild_id: int, channel_id: int) -> None:
     else:
         _corpus_insert_counter[key] = n
 
+    gn = _guild_total_insert_counter.get(guild_id, 0) + 1
+    if gn >= _GUILD_TOTAL_TRIM_EVERY:
+        _guild_total_insert_counter[guild_id] = 0
+        _spawn(trim_guild_total_if_needed(guild_id))
+    else:
+        _guild_total_insert_counter[guild_id] = gn
+
 
 def note_user_corpus_insert(guild_id: int, author_id: int) -> None:
     key = (guild_id, author_id)
@@ -149,7 +163,7 @@ def note_user_corpus_insert(guild_id: int, author_id: int) -> None:
     if n >= 50:
         _user_corpus_insert_counter[key] = 0
         _user_markov_cache.pop(key, None)
-        _spawn(trim_user_corpus_if_needed(guild_id))
+        _spawn(trim_user_corpus_if_needed(guild_id, author_id))
     else:
         _user_corpus_insert_counter[key] = n
 

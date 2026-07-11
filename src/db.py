@@ -1469,29 +1469,97 @@ async def trim_corpus_if_needed(guild_id: int, channel_id: int) -> None:
     )
 
 
-async def trim_user_corpus_if_needed(guild_id: int) -> None:
-    """Trim user_corpus for the whole guild (all authors combined) to MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM.
+def _water_fill_threshold(counts: list[int], cap: int) -> int:
+    """Mayor entero T tal que sum(min(c, T) for c in counts) <= cap.
 
-    TODO(bug pendiente, ver commit del fix de trim_corpus_if_needed por canal):
-    este trim es FIFO global por guild (ORDER BY id ASC), igual que tenía
-    corpus_messages antes del fix. El backfill inserta en user_corpus por cada
-    autor de cada canal procesado (save_corpus_and_user_message), así que un
-    autor activo en un canal backfilleado primero puede ser evicted por autores
-    de canales backfilleados después. No se corrigió junto con corpus_messages
-    porque cambiar el alcance a "por autor" multiplica el peor caso de disco
-    por la cantidad de autores del guild (potencialmente mucho mayor que la
-    cantidad de canales) — requiere decidir el número aparte antes de tocarlo.
+    Recortar cada canal a min(count_canal, T) reparte el excedente de forma
+    proporcional: los canales ya por debajo de T no pierden nada, los que
+    estaban muy por encima se recortan hasta emparejarse cerca de T. Es la
+    política opuesta a "más antiguo global" (el bug que ya arreglamos en
+    trim_corpus_if_needed): acá el orden de inserción entre canales nunca
+    entra en la decisión, solo el tamaño relativo de cada canal.
+
+    Búsqueda binaria sobre T en vez de un loop mensaje por mensaje: O(n log
+    max_count) con n = cantidad de canales del guild.
     """
+    if not counts or sum(counts) <= cap:
+        return max(counts, default=0)
+    lo, hi = 0, max(counts)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if sum(min(c, mid) for c in counts) <= cap:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+async def trim_guild_total_if_needed(guild_id: int) -> None:
+    """Segunda capa de seguridad sobre trim_corpus_if_needed: recorta el
+    TOTAL de corpus_messages de un guild (todos los canales sumados) cuando
+    la cantidad de canales activos hace que la suma crezca sin límite real
+    aunque cada canal individual respete su propio tope.
+
+    Política water-filling (ver _water_fill_threshold), NO "más antiguo
+    global": dentro de cada canal recortado sí se borra más viejo primero
+    (ahí es correcto, es el mismo canal), pero qué canal se recorta y cuánto
+    depende de su tamaño relativo a los demás, no de cuándo se insertó."""
+    cap = _limit_for_guild(
+        guild_id,
+        "MAX_CORPUS_MESSAGES_PER_GUILD_TOTAL_FREE",
+        "MAX_CORPUS_MESSAGES_PER_GUILD_TOTAL_PREMIUM",
+        150_000,
+        500_000,
+    )
+    db = await get_db()
+    async with db.execute(
+        "SELECT channel_id, COUNT(*) FROM corpus_messages WHERE guild_id=? GROUP BY channel_id",
+        (guild_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    counts = {int(r[0]): int(r[1]) for r in rows}
+    total = sum(counts.values())
+    if total <= cap:
+        return
+    threshold = _water_fill_threshold(list(counts.values()), cap)
+    async with _db_lock:
+        affected = 0
+        for channel_id, count in counts.items():
+            to_delete = count - threshold
+            if to_delete <= 0:
+                continue
+            affected += 1
+            await db.execute(
+                "DELETE FROM corpus_messages WHERE guild_id=? AND channel_id=? AND id IN "
+                "(SELECT id FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY id ASC LIMIT ?)",
+                (guild_id, channel_id, guild_id, channel_id, to_delete),
+            )
+        await db.commit()
+    log.debug(
+        "trim_guild_total: guild %s threshold=%d total=%d cap=%d canales_recortados=%d",
+        guild_id,
+        threshold,
+        total,
+        cap,
+        affected,
+    )
+
+
+async def trim_user_corpus_if_needed(guild_id: int, author_id: int) -> None:
+    """Recorta user_corpus al límite configurado, por autor (no por guild):
+    un autor muy activo no debe desplazar el corpus de otros autores del
+    mismo servidor."""
     max_msgs = _limit_for_guild(
         guild_id,
         "MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE",
         "MAX_USER_CORPUS_MESSAGES_PER_GUILD_PREMIUM",
-        5_000,
-        20_000,
+        2_000,
+        8_000,
     )
     db = await get_db()
     async with db.execute(
-        "SELECT COUNT(*) FROM user_corpus WHERE guild_id=?", (guild_id,)
+        "SELECT COUNT(*) FROM user_corpus WHERE guild_id=? AND author_id=?",
+        (guild_id, author_id),
     ) as cur:
         row = await cur.fetchone()
     count = int(row[0]) if row else 0
@@ -1500,14 +1568,15 @@ async def trim_user_corpus_if_needed(guild_id: int) -> None:
     to_delete = count - max_msgs
     async with _db_lock:
         await db.execute(
-            "DELETE FROM user_corpus WHERE guild_id=? AND id IN "
-            "(SELECT id FROM user_corpus WHERE guild_id=? ORDER BY id ASC LIMIT ?)",
-            (guild_id, guild_id, to_delete),
+            "DELETE FROM user_corpus WHERE guild_id=? AND author_id=? AND id IN "
+            "(SELECT id FROM user_corpus WHERE guild_id=? AND author_id=? ORDER BY id ASC LIMIT ?)",
+            (guild_id, author_id, guild_id, author_id, to_delete),
         )
         await db.commit()
     log.debug(
-        "trim_user_corpus: guild %s eliminados %d msgs (era %d, límite %d)",
+        "trim_user_corpus: guild %s autor %s eliminados %d msgs (era %d, límite %d)",
         guild_id,
+        author_id,
         to_delete,
         count,
         max_msgs,
