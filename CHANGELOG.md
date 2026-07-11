@@ -8,7 +8,9 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 ### Added
 - Sistema de servidores premium: tabla `premium_guilds`, gestionada por el bot owner desde el panel de administración del dashboard (endpoints `/api/admin/*`). Las features restringidas (memos, pool de imágenes, frases especiales, reacciones) siguen siempre activas en PURGATORY_GUILD_ID hardcodeado; para otros servidores se controla desde la tabla. `HOME_GUILD_ID` se migra automáticamente a la tabla en el primer arranque.
 - Limpieza diferida de datos al salir de un servidor: `on_guild_remove` registra la salida en `guild_departures`; task diaria purga datos (DB + R2) después de `GUILD_DATA_RETENTION_DAYS` (default 30). Reinvitar al bot dentro del período cancela el borrado.
-- Límites de almacenamiento por servidor: `MAX_CORPUS_MESSAGES_PER_GUILD` (50k), `MAX_USER_CORPUS_MESSAGES_PER_GUILD` (20k total del guild), `MAX_GIFS_PER_GUILD` (300), `MAX_IMAGES_PER_GUILD` (200) — eviction del registro más viejo al insertar uno nuevo, con limpieza de R2 cuando aplica.
+- Límites de almacenamiento por servidor: `MAX_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM`
+  (15k/50k, **por canal**, no por guild — un canal con mucho historial no
+  desplaza el corpus de otros canales del mismo servidor), `MAX_USER_CORPUS_MESSAGES_PER_GUILD` (20k total del guild), `MAX_GIFS_PER_GUILD` (300), `MAX_IMAGES_PER_GUILD` (200) — eviction del registro más viejo al insertar uno nuevo, con limpieza de R2 cuando aplica.
 - Límite de tamaño de GIF antes de subir a R2: `MAX_GIF_DOWNLOAD_BYTES` (8MB default); GIFs más grandes se descartan silenciosamente sin guardar la URL en la DB.
 - Mensaje de bienvenida en `on_guild_join` adaptado: servidores no-premium no ven referencias a `/momo`, 🎯 ni memes. `/help` marca con ⭐ las funciones premium.
 - Categoría **Frases** en `/settings`: agregar, listar y borrar frases especiales desde el panel (antes solo por comando).
@@ -26,6 +28,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ### Fixed
 - El bot ya no responde `"..."` cuando todavía no tiene mensajes suficientes del servidor (el estado de cualquier servidor recién agregado): al mencionarlo/responderle o al usar `/generar` ahora explica en lenguaje simple que necesita aprender del historial y sugiere `/refeed_all` o `/setup`. En menciones, las instrucciones completas salen a lo sumo una vez cada 15 min por servidor (después responde una versión corta). Texto nuevo integrado a i18n (es/en).
+- Pérdida de mensajes en el backfill de corpus (`/refeed`, `/refeed_all`): el trim de `corpus_messages` era FIFO global por servidor (ordenado por id de inserción), así que backfillear un canal podía desplazar el historial ya guardado de otro canal del mismo servidor. Ahora el trim y el límite (`MAX_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM`) son por canal. De paso: `_refeed_channel` reintenta con backoff ante `discord.HTTPException`/`discord.RateLimited` en vez de abortar el canal a medias, conserva el progreso para retomar en la próxima corrida, y loguea fetched/saved/discarded por corrida para auditar la tasa de filtrado.
 
 ## [1.1.0] — 2026-06-28
 
