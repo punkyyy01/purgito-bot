@@ -1431,7 +1431,10 @@ async def purge_guild_data(guild_id: int) -> None:
 # ─── Storage limits ──────────────────────────────────────────────────────────
 
 
-async def trim_corpus_if_needed(guild_id: int) -> None:
+async def trim_corpus_if_needed(guild_id: int, channel_id: int) -> None:
+    """Recorta corpus_messages al límite configurado, por canal (no por guild):
+    un canal con mucho historial no debe desplazar el corpus de otros canales
+    del mismo guild."""
     max_msgs = _limit_for_guild(
         guild_id,
         "MAX_CORPUS_MESSAGES_PER_GUILD_FREE",
@@ -1441,7 +1444,8 @@ async def trim_corpus_if_needed(guild_id: int) -> None:
     )
     db = await get_db()
     async with db.execute(
-        "SELECT COUNT(*) FROM corpus_messages WHERE guild_id=?", (guild_id,)
+        "SELECT COUNT(*) FROM corpus_messages WHERE guild_id=? AND channel_id=?",
+        (guild_id, channel_id),
     ) as cur:
         row = await cur.fetchone()
     count = int(row[0]) if row else 0
@@ -1450,14 +1454,15 @@ async def trim_corpus_if_needed(guild_id: int) -> None:
     to_delete = count - max_msgs
     async with _db_lock:
         await db.execute(
-            "DELETE FROM corpus_messages WHERE guild_id=? AND id IN "
-            "(SELECT id FROM corpus_messages WHERE guild_id=? ORDER BY id ASC LIMIT ?)",
-            (guild_id, guild_id, to_delete),
+            "DELETE FROM corpus_messages WHERE guild_id=? AND channel_id=? AND id IN "
+            "(SELECT id FROM corpus_messages WHERE guild_id=? AND channel_id=? ORDER BY id ASC LIMIT ?)",
+            (guild_id, channel_id, guild_id, channel_id, to_delete),
         )
         await db.commit()
     log.debug(
-        "trim_corpus: guild %s eliminados %d msgs (era %d, límite %d)",
+        "trim_corpus: guild %s canal %s eliminados %d msgs (era %d, límite %d)",
         guild_id,
+        channel_id,
         to_delete,
         count,
         max_msgs,
@@ -1465,7 +1470,18 @@ async def trim_corpus_if_needed(guild_id: int) -> None:
 
 
 async def trim_user_corpus_if_needed(guild_id: int) -> None:
-    """Trim user_corpus for the whole guild (all authors combined) to MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM."""
+    """Trim user_corpus for the whole guild (all authors combined) to MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE/PREMIUM.
+
+    TODO(bug pendiente, ver commit del fix de trim_corpus_if_needed por canal):
+    este trim es FIFO global por guild (ORDER BY id ASC), igual que tenía
+    corpus_messages antes del fix. El backfill inserta en user_corpus por cada
+    autor de cada canal procesado (save_corpus_and_user_message), así que un
+    autor activo en un canal backfilleado primero puede ser evicted por autores
+    de canales backfilleados después. No se corrigió junto con corpus_messages
+    porque cambiar el alcance a "por autor" multiplica el peor caso de disco
+    por la cantidad de autores del guild (potencialmente mucho mayor que la
+    cantidad de canales) — requiere decidir el número aparte antes de tocarlo.
+    """
     max_msgs = _limit_for_guild(
         guild_id,
         "MAX_USER_CORPUS_MESSAGES_PER_GUILD_FREE",

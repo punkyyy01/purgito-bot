@@ -39,6 +39,10 @@ _refeed_all_running: dict[int, asyncio.Task] = {}
 _MUTED_REPLY_COOLDOWN = 15 * 60
 _muted_reply_cooldowns: LRUDict = LRUDict(256)
 
+# Reintentos ante errores HTTP transitorios (5xx, timeouts) al paginar el
+# historial durante el refeed; discord.Forbidden/NotFound no se reintentan.
+_HISTORY_FETCH_RETRIES = 3
+
 
 class Chat(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -46,11 +50,13 @@ class Chat(commands.Cog):
 
     async def _save_message_to_corpus(
         self, guild_id: int, message: discord.Message
-    ) -> bool:
-        """Limpia y guarda un mensaje en corpus + user_corpus. Retorna si se insertó al corpus."""
+    ) -> str:
+        """Limpia y guarda un mensaje en corpus + user_corpus.
+        Retorna "saved", "discarded" (filtrado por clean_for_corpus) o
+        "duplicate" (ya estaba en el corpus, UNIQUE(guild_id, message_id))."""
         cleaned = generation.clean_for_corpus(message.content or "")
         if cleaned is None:
-            return False
+            return "discarded"
         corpus_ins, user_ins = await save_corpus_and_user_message(
             guild_id,
             message.channel.id,
@@ -63,7 +69,7 @@ class Chat(commands.Cog):
             generation.note_corpus_insert(guild_id, message.channel.id)
         if user_ins:
             generation.note_user_corpus_insert(guild_id, message.author.id)
-        return corpus_ins
+        return "saved" if corpus_ins else "duplicate"
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -82,8 +88,8 @@ class Chat(commands.Cog):
             # no corta la función: una mención directa merece respuesta (abajo).
             ignored = await is_channel_ignored(message.guild.id, message.channel.id)
             if not ignored:
-                inserted = await self._save_message_to_corpus(message.guild.id, message)
-                if inserted:
+                status = await self._save_message_to_corpus(message.guild.id, message)
+                if status == "saved":
                     auto_generate = generation.note_message_for_auto_generate(
                         message.guild.id, message.channel.id
                     )
@@ -304,6 +310,39 @@ class Chat(commands.Cog):
 
     # --- CORPUS ---
 
+    async def _fetch_history_batch(self, channel, **kwargs) -> list[discord.Message] | None:
+        """channel.history(**kwargs) con reintentos ante HTTPException transitorio
+        (5xx, timeouts) o discord.RateLimited (429 con max_ratelimit_timeout agotado).
+        Nota: discord.RateLimited NO hereda de HTTPException en discord.py, así que
+        se captura aparte; es la única de las dos que trae .retry_after en la práctica.
+        Devuelve None si se agotan los reintentos; deja que discord.Forbidden/NotFound
+        se propaguen tal cual, sin reintentar."""
+        for attempt in range(_HISTORY_FETCH_RETRIES):
+            try:
+                return [msg async for msg in channel.history(**kwargs)]
+            except (discord.Forbidden, discord.NotFound):
+                raise
+            except (discord.HTTPException, discord.RateLimited) as e:
+                if attempt == _HISTORY_FETCH_RETRIES - 1:
+                    log.exception(
+                        "_refeed_channel: fallo persistente leyendo historial de %s "
+                        "tras %d intentos",
+                        channel.id,
+                        _HISTORY_FETCH_RETRIES,
+                    )
+                    return None
+                wait = getattr(e, "retry_after", None) or 2**attempt
+                log.warning(
+                    "_refeed_channel: error transitorio leyendo historial de %s "
+                    "(intento %d/%d), reintentando en %.1fs",
+                    channel.id,
+                    attempt + 1,
+                    _HISTORY_FETCH_RETRIES,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+        return None
+
     async def _refeed_channel(self, guild_id: int, channel, max_messages: int) -> dict:
         """Lee el historial de un canal hacia el corpus, con estado persistente por canal.
 
@@ -313,26 +352,71 @@ class Chat(commands.Cog):
         """
         status = await get_channel_refeed_status(guild_id, channel.id)
         saved = 0
+        discarded = 0
+        duplicate = 0
+        fetched = 0
         forbidden = False
 
         if status and status["backfill_complete"]:
             newest = status["newest_message_id"]
-            after_obj = discord.Object(id=newest) if newest else None
-            try:
-                async for msg in channel.history(
-                    limit=None, after=after_obj, oldest_first=True
-                ):
-                    if newest is None or msg.id > newest:
-                        newest = msg.id
-                    if msg.author.bot:
-                        continue
-                    await save_gif_candidates(guild_id, msg)
-                    if await self._save_message_to_corpus(guild_id, msg):
-                        saved += 1
-            except discord.Forbidden:
-                forbidden = True
+            attempt = 0
+            while attempt < _HISTORY_FETCH_RETRIES:
+                after_obj = discord.Object(id=newest) if newest else None
+                try:
+                    async for msg in channel.history(
+                        limit=None, after=after_obj, oldest_first=True
+                    ):
+                        fetched += 1
+                        if newest is None or msg.id > newest:
+                            newest = msg.id
+                        if msg.author.bot:
+                            continue
+                        await save_gif_candidates(guild_id, msg)
+                        result = await self._save_message_to_corpus(guild_id, msg)
+                        if result == "saved":
+                            saved += 1
+                        elif result == "discarded":
+                            discarded += 1
+                        else:
+                            duplicate += 1
+                    break
+                except discord.Forbidden:
+                    forbidden = True
+                    break
+                except (discord.HTTPException, discord.RateLimited) as e:
+                    attempt += 1
+                    # newest ya avanzó con lo procesado hasta el corte; el reintento
+                    # (o la próxima corrida, si se agotan los intentos) retoma desde ahí.
+                    if attempt >= _HISTORY_FETCH_RETRIES:
+                        log.exception(
+                            "_refeed_channel: error persistente leyendo incremental de %s "
+                            "tras %d intentos, se retoma en newest_message_id=%s en la próxima corrida",
+                            channel.id,
+                            attempt,
+                            newest,
+                        )
+                        break
+                    wait = getattr(e, "retry_after", None) or 2**attempt
+                    log.warning(
+                        "_refeed_channel: error transitorio leyendo incremental de %s "
+                        "(intento %d/%d) en newest_message_id=%s, reintentando en %.1fs",
+                        channel.id,
+                        attempt,
+                        _HISTORY_FETCH_RETRIES,
+                        newest,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
             await upsert_channel_refeed_status(
                 guild_id, channel.id, newest_message_id=newest
+            )
+            log.info(
+                "_refeed_channel: %s (incremental) fetched=%d saved=%d discarded=%d duplicate=%d",
+                channel.id,
+                fetched,
+                saved,
+                discarded,
+                duplicate,
             )
             return {
                 "saved": saved,
@@ -344,20 +428,26 @@ class Chat(commands.Cog):
         # Backfill hacia atrás: reanuda desde oldest_message_id si una corrida previa quedó a medias.
         newest_seen = status["newest_message_id"] if status else None
         oldest = status["oldest_message_id"] if status else None
-        fetched = 0
         complete = False
 
         while fetched < max_messages:
             before_obj = discord.Object(id=oldest) if oldest else None
             try:
-                batch = [
-                    msg
-                    async for msg in channel.history(
-                        limit=100, before=before_obj, oldest_first=False
-                    )
-                ]
+                batch = await self._fetch_history_batch(
+                    channel, limit=100, before=before_obj, oldest_first=False
+                )
             except discord.Forbidden:
                 forbidden = True
+                break
+            if batch is None:
+                # Reintentos agotados en _fetch_history_batch (ya logueado ahí):
+                # se corta acá, oldest_message_id queda guardado para retomar.
+                log.warning(
+                    "_refeed_channel: backfill de %s cortado en oldest_message_id=%s, "
+                    "se retoma en la próxima corrida",
+                    channel.id,
+                    oldest,
+                )
                 break
             if not batch:
                 complete = True
@@ -370,11 +460,25 @@ class Chat(commands.Cog):
                 if msg.author.bot:
                     continue
                 await save_gif_candidates(guild_id, msg)
-                if await self._save_message_to_corpus(guild_id, msg):
+                result = await self._save_message_to_corpus(guild_id, msg)
+                if result == "saved":
                     saved += 1
+                elif result == "discarded":
+                    discarded += 1
+                else:
+                    duplicate += 1
 
             oldest = batch[-1].id
 
+        log.info(
+            "_refeed_channel: %s (backfill) fetched=%d saved=%d discarded=%d duplicate=%d complete=%s",
+            channel.id,
+            fetched,
+            saved,
+            discarded,
+            duplicate,
+            complete,
+        )
         await upsert_channel_refeed_status(
             guild_id,
             channel.id,

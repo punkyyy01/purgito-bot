@@ -138,7 +138,7 @@ def note_corpus_insert(guild_id: int, channel_id: int) -> None:
     if n >= 50:
         _corpus_insert_counter[key] = 0
         _markov_cache.pop(guild_id, None)
-        _spawn(trim_corpus_if_needed(guild_id))
+        _spawn(trim_corpus_if_needed(guild_id, channel_id))
     else:
         _corpus_insert_counter[key] = n
 
