@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
+import markdown
 from aiohttp import web
 from aiohttp_session import get_session, setup as setup_session
 from aiohttp_session.cookie_storage import EncryptedCookieStorage
@@ -86,7 +87,7 @@ _DISCORD_API = "https://discord.com/api"
 _ADMINISTRATOR = 1 << 3
 _MANAGE_GUILD = 1 << 5
 _GUILDS_CACHE_TTL = 300.0
-_PUBLIC_GETS = ("/", "/api/gifs", "/health")
+_PUBLIC_GETS = ("/", "/api/gifs", "/health", "/terms", "/privacy")
 
 
 def _client_ip(request: web.Request) -> str:
@@ -337,7 +338,7 @@ async def _api_health(request: web.Request) -> web.Response:
 
 async def _gallery(request: web.Request) -> web.Response:
     # No quitar: el panel y la galeria comparten el mismo server/puerto,
-    # sin este host-check panel.purg4t0ry.com muestra la galeria de GIFs.
+    # sin este host-check panel.purgito.app muestra la galeria de GIFs.
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
     # Solo con dashboard activo: sin él no hay sesiones y get_session lanza RuntimeError (500).
     if DASHBOARD_ENABLED and "panel." in host:
@@ -348,6 +349,53 @@ async def _gallery(request: web.Request) -> web.Response:
     return web.Response(
         text=GIF_GALLERY_HTML, content_type="text/html", charset="utf-8"
     )
+
+
+# ---------------- Docs legales (/terms, /privacy) ----------------
+
+_DOCS_DIR = Path(__file__).parent.parent / "docs"
+
+
+def _render_legal_doc(filename: str, title: str) -> str:
+    """Markdown -> HTML con la estética oscura del sitio; se llama solo al
+    arrancar el proceso, el resultado queda cacheado en las constantes de abajo."""
+    try:
+        text = (_DOCS_DIR / filename).read_text(encoding="utf-8")
+        body = markdown.markdown(text)
+    except OSError:
+        log.exception("No se pudo leer %s para /terms o /privacy", filename)
+        body = "<p>No se pudo cargar este documento. Intenta de nuevo más tarde.</p>"
+    return (
+        "<!DOCTYPE html><html lang='es'><head><meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+        f"<title>Purgito · {html.escape(title)}</title>"
+        "<link rel='stylesheet' href='/static/panel.css'>"
+        "<style>"
+        "body{padding:2.5rem 1rem 4rem}"
+        ".legal{max-width:760px;margin:0 auto;line-height:1.65}"
+        ".legal h1{font-size:1.8rem;margin:1.8rem 0 0.8rem}"
+        ".legal h1:first-child{margin-top:0}"
+        ".legal h2{font-size:1.3rem;margin:1.6rem 0 0.6rem}"
+        ".legal p,.legal ul,.legal ol{margin:0 0 1rem}"
+        ".legal ul,.legal ol{padding-left:1.4rem}"
+        ".legal hr{border:none;border-top:1px solid var(--border);margin:1.6rem 0}"
+        ".legal a{color:var(--accent-hover)}"
+        "</style></head><body>"
+        f"<main class='legal'>{body}</main>"
+        "</body></html>"
+    )
+
+
+_TERMS_HTML = _render_legal_doc("TERMS.md", "Términos del Servicio")
+_PRIVACY_HTML = _render_legal_doc("PRIVACY.md", "Política de Privacidad")
+
+
+async def _terms_page(request: web.Request) -> web.Response:
+    return web.Response(text=_TERMS_HTML, content_type="text/html", charset="utf-8")
+
+
+async def _privacy_page(request: web.Request) -> web.Response:
+    return web.Response(text=_PRIVACY_HTML, content_type="text/html", charset="utf-8")
 
 
 # ---------------- Auth OAuth2 ----------------
@@ -1141,6 +1189,8 @@ async def start_web_server(bot: commands.Bot) -> None:
     app.router.add_get("/", _gallery)
     app.router.add_get("/api/gifs", _api_gif_list)
     app.router.add_get("/health", _api_health)
+    app.router.add_get("/terms", _terms_page)
+    app.router.add_get("/privacy", _privacy_page)
     # Fuera del bloque DASHBOARD_ENABLED: Polar le pega sin sesión OAuth
     # y el premium debe poder activarse aunque el panel esté apagado.
     app.router.add_post("/webhooks/polar", _webhook_polar)

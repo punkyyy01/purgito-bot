@@ -74,7 +74,7 @@ DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rs
 )
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 # URL pública del panel, mostrada en /help, /setup y /settings.
-PANEL_URL = os.getenv("PANEL_URL", "https://panel.purg4t0ry.com").rstrip("/")
+PANEL_URL = os.getenv("PANEL_URL", "https://panel.purgito.app").rstrip("/")
 
 # --- Polar.sh (compra de premium) ---
 POLAR_ACCESS_TOKEN = os.getenv("POLAR_ACCESS_TOKEN", "")

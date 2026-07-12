@@ -1,6 +1,6 @@
 # Condiciones del Servicio (Terms of Service)
 
-**Última actualización:** 11 de julio de 2026
+**Última actualización:** 12 de julio de 2026
 
 Al invitar **Purgito** a un servidor de Discord o interactuar con él, aceptas los presentes Términos del Servicio, así como los [Términos de Servicio](https://discord.com/terms) y la [Política de Privacidad](https://discord.com/privacy) de Discord.
 
@@ -48,7 +48,7 @@ Los administradores del servidor son responsables de moderar el uso del bot dent
 
 # 4. Suscripciones y pagos
 
-Purgito ofrece un plan **premium** por servidor, contratable desde el dashboard (panel.purg4t0ry.com).
+Purgito ofrece un plan **premium** por servidor, contratable desde el dashboard (panel.purgito.app).
 
 ## Qué desbloquea premium
 
@@ -79,8 +79,6 @@ La suscripción se cancela desde el portal de cliente de Polar, cuyo acceso se e
 ## Reembolsos
 
 No se ofrecen reembolsos por el período ya iniciado o pagado. Cancelar la suscripción detiene únicamente la renovación futura: el acceso premium permanece activo hasta el final del período ya pagado.
-
-<!-- TODO: confirmar con Frambuesa la política de reembolsos — se documentó el comportamiento que ya sugiere el texto del panel (sin reembolso, acceso hasta fin del período pagado), pero no hay una política de reembolsos explícita en el código a confirmar. -->
 
 ## Revocación
 

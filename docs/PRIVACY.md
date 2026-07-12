@@ -1,6 +1,6 @@
 # Política de Privacidad (Privacy Policy)
 
-**Última actualización:** 11 de julio de 2026
+**Última actualización:** 12 de julio de 2026
 
 Esta Política describe cómo **Purgito** recopila, utiliza, almacena y protege la información necesaria para ofrecer sus funcionalidades.
 
@@ -66,7 +66,7 @@ Sobre datos de pago, ver la sección **"Pagos y suscripciones"** más abajo: Pur
 
 ## Pagos y suscripciones
 
-Cuando un servidor contrata premium a través del dashboard (panel.purg4t0ry.com), el pago lo procesa **Polar.sh**, no Purgito.
+Cuando un servidor contrata premium a través del dashboard (panel.purgito.app), el pago lo procesa **Polar.sh**, no Purgito.
 
 **Purgito almacena únicamente:**
 

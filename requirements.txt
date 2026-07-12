@@ -12,3 +12,4 @@ yt-dlp==2026.7.4
 PyNaCl==1.6.2
 aiohttp-session[secure]==2.12.1
 polar-sdk==0.31.7
+markdown==3.10.2
