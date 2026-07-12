@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Purgito — el bot que aprende cómo habla tu servidor</title>
+  <meta name="description" content="Bot de Discord con chat que imita el estilo de tu comunidad, memes generados con IA, galería de GIFs, música y avisos de YouTube.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── NAV ─────────────────────────────────────────── -->
+  <nav class="nav">
+    <a class="wordmark" href="#top">
+      <svg class="wordmark-mark" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="1" y="1" width="24" height="24" rx="7" fill="url(#g)"></rect>
+        <path d="M7 9.5 L11 13 L7 16.5" fill="none" stroke="#0B0C10" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <line x1="13" y1="17" x2="19" y2="17" stroke="#0B0C10" stroke-width="2.2" stroke-linecap="round"></line>
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#8B6EF5"></stop>
+            <stop offset="1" stop-color="#FF3D7F"></stop>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span>Purgito</span>
+    </a>
+    <a class="btn btn-primary nav-cta" href="https://discord.com/oauth2/authorize?client_id=1471724794411089920&permissions=414539926720&scope=bot%20applications.commands">
+      Añadir a Discord
+    </a>
+  </nav>
+
+  <!-- ── HERO ────────────────────────────────────────── -->
+  <header class="hero" id="top">
+    <h1 class="hero-title">Purgito lee tu servidor y responde como uno más del grupo.</h1>
+    <p class="hero-sub">
+      Un bot de Discord con chat que aprende el estilo de tu comunidad y le contesta
+      igual de raro. De paso genera memes con las imágenes que ustedes suben, guarda GIFs,
+      pone música y avisa cuando sale un video nuevo en YouTube.
+    </p>
+
+    <!-- Ticker: elemento firma -->
+    <div class="ticker" role="img" aria-label="Ejemplos de frases generadas por el bot">
+      <span class="ticker-prompt">&gt;&nbsp;</span><span class="ticker-text" id="ticker-text"></span><span class="ticker-cursor" id="ticker-cursor">▌</span>
+    </div>
+
+    <a class="btn btn-primary btn-lg" href="https://discord.com/oauth2/authorize?client_id=1471724794411089920&permissions=414539926720&scope=bot%20applications.commands">
+      Añadir a Discord
+    </a>
+    <p class="hero-note">Gratis. Sin tarjeta. Lo configuras en un par de minutos.</p>
+  </header>
+
+  <main>
+    <!-- ── FEATURES ──────────────────────────────────── -->
+    <section class="section features" aria-labelledby="features-title">
+      <h2 class="section-title" id="features-title">Qué hace</h2>
+      <div class="feature-grid">
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-4-1L3 21l1.5-4.5a8.38 8.38 0 0 1-1-4A8.5 8.5 0 0 1 12 4a8.5 8.5 0 0 1 9 7.5z"></path>
+            </svg>
+          </div>
+          <h3 class="card-title">Chat que aprende</h3>
+          <p class="card-tag">cadenas de Markov</p>
+          <p class="card-text">Lee los mensajes de los canales que le permitas y arma respuestas imitando cómo escribe tu server. Cada comunidad suena distinta.</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <path d="m21 15-5-5L5 21"></path>
+            </svg>
+          </div>
+          <h3 class="card-title"><code>/momo</code> y <code>/meme</code></h3>
+          <p class="card-tag">caption por IA</p>
+          <p class="card-text">Toma imágenes que la comunidad va guardando y les pone un caption generado por IA. Memes hechos con el material del propio server.</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+              <path d="M2 9h20"></path>
+              <path d="m9 13 3 2 3-2v4l-3 2-3-2z"></path>
+            </svg>
+          </div>
+          <h3 class="card-title">Galería de GIFs</h3>
+          <p class="card-tag">una por servidor</p>
+          <p class="card-text">Cada servidor arma su propia colección de GIFs, con una galería web para verlos y administrarlos sin salir del navegador.</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2.5 17a24 24 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49 49 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24 24 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49 49 0 0 1-16.2 0A2 2 0 0 1 2.5 17"></path>
+              <path d="m10 15 5-3-5-3z"></path>
+            </svg>
+          </div>
+          <h3 class="card-title">Avisos de YouTube</h3>
+          <p class="card-tag">video nuevo</p>
+          <p class="card-text">Sigue los canales que elijas y manda un mensaje al servidor apenas suben un video, con mención de rol opcional.</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M12 7v5l3 2"></path>
+            </svg>
+          </div>
+          <h3 class="card-title">Anuncios programados</h3>
+          <p class="card-tag">a la hora que quieras</p>
+          <p class="card-text">Deja mensajes automáticos que salen a una hora fija o cada cierto intervalo. Útil para recordatorios y rutinas del server.</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18V5l12-2v13"></path>
+              <circle cx="6" cy="18" r="3"></circle>
+              <circle cx="18" cy="16" r="3"></circle>
+            </svg>
+          </div>
+          <h3 class="card-title">Música</h3>
+          <p class="card-tag">YouTube · SoundCloud</p>
+          <p class="card-text">Reproduce en el canal de voz desde YouTube o SoundCloud. Pega una URL o busca por nombre y artista.</p>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ── PREMIUM ───────────────────────────────────── -->
+    <section class="section premium" aria-labelledby="premium-title">
+      <h2 class="section-title" id="premium-title">Free y Premium</h2>
+      <p class="section-sub">Todo lo de arriba funciona gratis. Premium sube los límites y desbloquea los memes automáticos.</p>
+
+      <div class="table-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col" class="th-feature">Función</th>
+              <th scope="col">Free</th>
+              <th scope="col" class="th-premium">Premium</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Memes automáticos programados</th>
+              <td class="no">—</td>
+              <td class="yes">Sí</td>
+            </tr>
+            <tr>
+              <th scope="row">Mensajes en memoria (corpus)</th>
+              <td>15.000</td>
+              <td class="hl">50.000</td>
+            </tr>
+            <tr>
+              <th scope="row">Mensajes por usuario en memoria</th>
+              <td>2.000</td>
+              <td class="hl">8.000</td>
+            </tr>
+            <tr>
+              <th scope="row">GIFs guardados</th>
+              <td>1.500</td>
+              <td class="hl">4.000</td>
+            </tr>
+            <tr>
+              <th scope="row">Imágenes para memes</th>
+              <td>75</td>
+              <td class="hl">200</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="price-row">
+        <div class="price-card">
+          <p class="price-plan">Mensual</p>
+          <p class="price-amount">$4.99<span>/mes</span></p>
+          <p class="price-trial">7 días de prueba gratis</p>
+        </div>
+        <div class="price-card">
+          <p class="price-plan">Anual</p>
+          <p class="price-amount">$39.99<span>/año</span></p>
+          <p class="price-trial">dos meses menos que pagar mes a mes</p>
+        </div>
+      </div>
+
+      <p class="premium-cta">
+        <a class="btn btn-secondary" href="https://panel.purgito.app">Activar Premium en el panel</a>
+      </p>
+      <p class="premium-note">El premium queda asociado al servidor, no a tu cuenta. Se activa y cancela desde el panel.</p>
+    </section>
+
+    <!-- ── CTA FINAL ─────────────────────────────────── -->
+    <section class="section final-cta" aria-labelledby="final-title">
+      <h2 class="section-title" id="final-title">Súmalo y deja que aprenda</h2>
+      <p class="section-sub">Mientras más lee tu servidor, más suena como ustedes.</p>
+      <a class="btn btn-primary btn-lg" href="https://discord.com/oauth2/authorize?client_id=1471724794411089920&permissions=414539926720&scope=bot%20applications.commands">
+        Añadir a Discord
+      </a>
+    </section>
+  </main>
+
+  <!-- ── FOOTER ──────────────────────────────────────── -->
+  <footer class="footer">
+    <span class="footer-brand">Purgito</span>
+    <nav class="footer-links" aria-label="Legal">
+      <a href="https://panel.purgito.app/terms">Términos</a>
+      <a href="https://panel.purgito.app/privacy">Privacidad</a>
+    </nav>
+    <span class="footer-note">Código abierto · Licencia MIT</span>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
