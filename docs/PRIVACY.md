@@ -2,7 +2,9 @@
 
 **Última actualización:** 11 de julio de 2026
 
-Esta Política describe cómo **Purgatory Bot** recopila, utiliza, almacena y protege la información necesaria para ofrecer sus funcionalidades.
+Esta Política describe cómo **Purgito** recopila, utiliza, almacena y protege la información necesaria para ofrecer sus funcionalidades.
+
+Purgito es un bot público de Discord, usado por múltiples servidores. Purgatory es uno de esos servidores, sin trato especial en lo que respecta a esta Política.
 
 ---
 
@@ -95,7 +97,7 @@ Los datos **no se venden** ni se utilizan para publicidad.
 
 # 3. Servicios de terceros
 
-Purgatory Bot utiliza servicios externos para determinadas funciones.
+Purgito utiliza servicios externos para determinadas funciones.
 
 Actualmente pueden utilizarse:
 
@@ -135,7 +137,7 @@ Cuando sea técnicamente posible, se atenderán las solicitudes razonables de el
 
 # 6. Menores de edad
 
-Purgatory Bot está destinado a usuarios que cumplen con los requisitos mínimos de edad establecidos por Discord.
+Purgito está destinado a usuarios que cumplen con los requisitos mínimos de edad establecidos por Discord.
 
 Para contratar premium se requiere tener capacidad legal para contratar, o contar con la autorización de un adulto responsable. Purgito no verifica esto activamente; es responsabilidad de quien realiza la compra.
 

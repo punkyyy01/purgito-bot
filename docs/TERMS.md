@@ -2,13 +2,15 @@
 
 **Última actualización:** 11 de julio de 2026
 
-Al invitar **Purgatory Bot** a un servidor de Discord o interactuar con él, aceptas los presentes Términos del Servicio, así como los [Términos de Servicio](https://discord.com/terms) y la [Política de Privacidad](https://discord.com/privacy) de Discord.
+Al invitar **Purgito** a un servidor de Discord o interactuar con él, aceptas los presentes Términos del Servicio, así como los [Términos de Servicio](https://discord.com/terms) y la [Política de Privacidad](https://discord.com/privacy) de Discord.
+
+Purgito es un bot público de Discord, usado por múltiples servidores. Purgatory es uno de esos servidores, sin trato especial en lo que respecta a estos Términos.
 
 ---
 
 # 1. Uso Aceptable
 
-Purgatory Bot está diseñado para el entretenimiento, la generación de memes, la reproducción de música, la automatización de tareas y la interacción mediante inteligencia artificial (Cadenas de Markov y modelos de lenguaje externos).
+Purgito está diseñado para el entretenimiento, la generación de memes, la reproducción de música, la automatización de tareas y la interacción mediante inteligencia artificial (Cadenas de Markov y modelos de lenguaje externos).
 
 Al utilizar el bot aceptas que **no debes**:
 
@@ -21,7 +23,7 @@ Al utilizar el bot aceptas que **no debes**:
 
 # 2. Código Abierto
 
-El código fuente de Purgatory Bot se distribuye bajo la **Licencia MIT**.
+El código fuente de Purgito se distribuye bajo la **Licencia MIT**.
 
 El software se proporciona **"tal cual"**, sin garantías de ningún tipo, expresas o implícitas, incluyendo, entre otras, garantías de funcionamiento continuo, disponibilidad, comerciabilidad o idoneidad para un propósito específico.
 
@@ -29,7 +31,7 @@ El software se proporciona **"tal cual"**, sin garantías de ningún tipo, expre
 
 # 3. Contenido Generado
 
-Purgatory Bot puede generar texto utilizando:
+Purgito puede generar texto utilizando:
 
 - Cadenas de Markov entrenadas con mensajes del servidor.
 - Modelos de lenguaje externos (Groq).
@@ -46,7 +48,7 @@ Los administradores del servidor son responsables de moderar el uso del bot dent
 
 # 4. Suscripciones y pagos
 
-Purgatory Bot ofrece un plan **premium** por servidor, contratable desde el dashboard (panel.purg4t0ry.com).
+Purgito ofrece un plan **premium** por servidor, contratable desde el dashboard (panel.purg4t0ry.com).
 
 ## Qué desbloquea premium
 
@@ -96,7 +98,7 @@ Para contratar premium se requiere tener capacidad legal para contratar, o conta
 
 # 5. Disponibilidad del Servicio
 
-Purgatory Bot y los servicios asociados (como el dashboard de administración y la galería web de GIFs) se proporcionan sin garantías de disponibilidad continua.
+Purgito y los servicios asociados (como el dashboard de administración y la galería web de GIFs) se proporcionan sin garantías de disponibilidad continua.
 
 El desarrollador podrá, en cualquier momento y sin previo aviso:
 
