@@ -19,6 +19,13 @@ _LIMITS_ENV_PATH = os.path.join(
 )
 load_dotenv(dotenv_path=_LIMITS_ENV_PATH)
 
+# urls.env: URLs/dominios públicos no sensibles, versionado en git aparte del .env.
+# Mismo criterio que limits.env: no son secretos, cambian solo al migrar dominio.
+_URLS_ENV_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "urls.env"
+)
+load_dotenv(dotenv_path=_URLS_ENV_PATH)
+
 log = logging.getLogger(__name__)
 
 
@@ -75,6 +82,16 @@ DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rs
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 # URL pública del panel, mostrada en /help, /setup y /settings.
 PANEL_URL = os.getenv("PANEL_URL", "https://panel.purgito.app").rstrip("/")
+# URL pública de la landing (purgito.app); destino del post-login con from=landing.
+LANDING_URL = os.getenv("LANDING_URL", "https://purgito.app").rstrip("/")
+# Dominio para compartir la cookie de sesión entre subdominios (landing + panel).
+# Vacío (None) = cookie atada solo al host del panel, comportamiento clásico.
+SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN", "").strip() or None
+# Orígenes de la landing que pueden hacer requests autenticadas (con cookies)
+# al panel; separados por coma. Vacío = solo DASHBOARD_BASE_URL, como siempre.
+LANDING_ORIGINS = frozenset(
+    o.strip().rstrip("/") for o in os.getenv("LANDING_ORIGINS", "").split(",") if o.strip()
+)
 
 # --- Polar.sh (compra de premium) ---
 POLAR_ACCESS_TOKEN = os.getenv("POLAR_ACCESS_TOKEN", "")

@@ -29,6 +29,8 @@ from config import (
     DASHBOARD_ENABLED,
     DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET,
+    LANDING_ORIGINS,
+    LANDING_URL,
     PANEL_URL,
     POLAR_ACCESS_TOKEN,
     POLAR_PRODUCT_ID_ANNUAL,
@@ -36,6 +38,7 @@ from config import (
     POLAR_SERVER,
     POLAR_WEBHOOK_SECRET,
     PURGATORY_GUILD_ID,
+    SESSION_COOKIE_DOMAIN,
     SESSION_SECRET,
     WEB_PORT,
     get_invite_url,
@@ -135,7 +138,12 @@ async def _cors_middleware(request: web.Request, handler) -> web.StreamResponse:
         resp: web.StreamResponse = web.Response()
     else:
         resp = await handler(request)
-    if DASHBOARD_ENABLED and origin and origin == DASHBOARD_BASE_URL:
+    if DASHBOARD_ENABLED and origin and (
+        origin == DASHBOARD_BASE_URL or origin in LANDING_ORIGINS
+    ):
+        # Origen confiable (panel o landing): eco del origin + credentials para
+        # que las cookies de sesión viajen. La landing NO va por el comodín "*"
+        # de abajo: Allow-Origin "*" y Allow-Credentials son incompatibles.
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Access-Control-Allow-Credentials"] = "true"
     elif request.method in ("GET", "OPTIONS") and request.path in _PUBLIC_GETS:
@@ -409,8 +417,29 @@ def _avatar_url(user: dict) -> str:
     return f"https://cdn.discordapp.com/embed/avatars/{index}.png"
 
 
+async def _api_public_me(request: web.Request) -> web.Response:
+    """Identidad de la sesión para la landing (purgito.app): informa, nunca
+    redirige. Público a propósito — no expone nada que el propio navegador
+    del usuario no tenga ya en su sesión."""
+    session = await get_session(request)
+    user_id = session.get("user_id")
+    if not user_id:
+        return web.json_response({"logged_in": False})
+    return web.json_response(
+        {
+            "logged_in": True,
+            "username": session.get("username"),
+            "avatar_url": session.get("avatar_url"),
+        }
+    )
+
+
 async def _auth_login(request: web.Request) -> web.StreamResponse:
     session = await get_session(request)
+    # Whitelist explícito, nunca una URL del query string (sería open redirect):
+    # solo el literal "landing" habilita volver a LANDING_URL tras el callback.
+    if request.query.get("from") == "landing":
+        session["post_login_redirect"] = "landing"
     state = secrets.token_urlsafe(24)
     session["oauth_state"] = state
     params = urlencode(
@@ -497,6 +526,8 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     # del panel re-consulta a Discord ~1 s después del callback, recibe 429 → el
     # panel responde 401 → el JS redirige a /auth/login como si no hubiera sesión.
     _user_guilds_cache[user["id"]] = (time.monotonic() + _GUILDS_CACHE_TTL, manage)
+    if session.pop("post_login_redirect", None) == "landing":
+        raise web.HTTPFound(LANDING_URL)
     raise web.HTTPFound("/servers")
 
 
@@ -1171,6 +1202,9 @@ def _new_session_storage() -> EncryptedCookieStorage:
     return EncryptedCookieStorage(
         key,
         cookie_name="PURGITO_SESSION",
+        # None = cookie atada al host del panel (comportamiento clásico);
+        # ".purgito.app" en producción la comparte con la landing.
+        domain=SESSION_COOKIE_DOMAIN,
         max_age=7 * 24 * 3600,
         httponly=True,
         samesite="Lax",
@@ -1201,6 +1235,8 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.on_response_prepare.append(_log_auth_set_cookie)  # debug temporal
         app.router.add_post("/api/gifs", require_login(_api_gif_add))
         app.router.add_delete("/api/gifs/{id}", require_login(_api_gif_delete))
+        # Depende de get_session, por eso vive dentro del bloque DASHBOARD_ENABLED.
+        app.router.add_get("/api/public/me", _api_public_me)
         app.router.add_get("/auth/login", _auth_login)
         app.router.add_get("/auth/callback", _auth_callback)
         app.router.add_get("/auth/logout", _auth_logout)

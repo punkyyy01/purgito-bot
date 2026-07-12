@@ -1,18 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
 :root {
-  --bg:            #0c0c0e;
-  --surface:       #17171b;
-  --surface-2:     #1e1e23;
-  --border:        #2b2b32;
+  /* Identidad de marca compartida con landing/ (purgito.app): violeta/magenta
+     sobre negro azulado. Los valores base salen tal cual de landing/style.css;
+     --surface-2, --accent-hover, --success, --danger y --premium se derivan
+     acá porque landing no los define (ver reporte de decisiones). */
+  --bg:            #0B0C10;
+  --surface:       #16171D;
+  --surface-2:     #1E2029;
+  --border:        #24252E;
 
-  --text:          #eaeaec;
-  --text-muted:    #96969e;
+  --text:          #EDEAE3;
+  --text-muted:    #9B9890;
 
-  --accent:        #b7332e;
-  --accent-hover:  #cf3d37;
+  --accent:        #8B6EF5;
+  --accent-hover:  #A28BF7;
 
-  --success:       #3aa65a;
-  --danger:        #c94343;
-  --premium:       #d4a017;
+  --success:       #2BA96B;
+  --danger:        #D6304F;
+  --premium:       #E3B341;
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Space Mono", ui-monospace, "SFMono-Regular", monospace;
 
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -30,7 +39,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
 }
 
 h1 { font-size: 22px; font-weight: 600; }
@@ -73,7 +82,7 @@ textarea:focus-visible {
   color: var(--text);
   transition: background var(--transition), border-color var(--transition), color var(--transition);
 }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); color: var(--bg); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--surface-2); border: 1px solid var(--border); }
 .btn-secondary:hover { border-color: var(--accent); }
@@ -132,7 +141,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 
 .badge {
   background: var(--accent);
-  color: #fff;
+  color: var(--bg);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -141,7 +150,7 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
   margin-left: 8px;
   vertical-align: middle;
 }
-.badge-premium { background: var(--premium); color: #1a1400; }
+.badge-premium { background: var(--premium); color: var(--bg); }
 
 /* ---------- Iconos de interfaz ---------- */
 
@@ -398,7 +407,7 @@ h1 {
   padding: 6px 12px;
   border-radius: 999px;
   background: var(--premium);
-  color: #1a1400;
+  color: var(--bg);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.3px;
@@ -410,7 +419,7 @@ h1 {
   right: auto;
   left: 18px;
   background: var(--success);
-  color: #06210f;
+  color: var(--bg);
 }
 .premium-plan-fineprint {
   margin: 0;
@@ -519,6 +528,7 @@ h1 {
   text-decoration: none;
 }
 .gif-card .gif-url {
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
   word-break: break-all;

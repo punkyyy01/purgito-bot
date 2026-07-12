@@ -70,3 +70,104 @@
     typePhrase(pickNext(), 0);
   }
 })();
+
+/* Estado de sesión en el nav: consulta la sesión compartida con el panel y
+   renderiza login o avatar+dropdown. El slot arranca vacío y aparece ya
+   resuelto (sin parpadeo). Cualquier fallo del fetch degrada en silencio al
+   botón de login — nunca un error visible ni romper el resto de la página. */
+
+(function () {
+  var PANEL = 'https://panel.purgito.app';
+  var slot = document.getElementById('auth-slot');
+  if (!slot) return;
+
+  function renderLogin() {
+    var a = document.createElement('a');
+    a.className = 'btn btn-login';
+    a.href = PANEL + '/auth/login?from=landing';
+    a.textContent = 'Iniciar sesión con Discord';
+    slot.appendChild(a);
+  }
+
+  function renderUser(data) {
+    var wrap = document.createElement('div');
+    wrap.className = 'auth-wrap';
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'auth-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+
+    if (data.avatar_url) {
+      var img = document.createElement('img');
+      img.className = 'auth-avatar';
+      img.src = data.avatar_url;
+      img.alt = '';
+      btn.appendChild(img);
+    }
+    var name = document.createElement('span');
+    name.className = 'auth-name';
+    name.textContent = data.username || 'Usuario';
+    btn.appendChild(name);
+
+    var chev = document.createElement('span');
+    chev.className = 'auth-chevron';
+    chev.setAttribute('aria-hidden', 'true');
+    chev.textContent = '▾';
+    btn.appendChild(chev);
+
+    var menu = document.createElement('div');
+    menu.className = 'auth-menu';
+    menu.hidden = true;
+
+    var head = document.createElement('p');
+    head.className = 'auth-menu-name';
+    head.textContent = data.username || 'Usuario';
+    menu.appendChild(head);
+
+    var sep = document.createElement('hr');
+    sep.className = 'auth-menu-sep';
+    menu.appendChild(sep);
+
+    [
+      { href: PANEL + '/servers', label: 'Panel de administración' },
+      { href: PANEL + '/auth/logout', label: 'Cerrar sesión' }
+    ].forEach(function (item) {
+      var a = document.createElement('a');
+      a.className = 'auth-menu-item';
+      a.href = item.href;
+      a.textContent = item.label;
+      menu.appendChild(a);
+    });
+
+    function setOpen(open) {
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+    }
+    btn.addEventListener('click', function () {
+      setOpen(menu.hidden);
+    });
+    document.addEventListener('click', function (e) {
+      if (!menu.hidden && !wrap.contains(e.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !menu.hidden) {
+        setOpen(false);
+        btn.focus();
+      }
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    slot.appendChild(wrap);
+  }
+
+  fetch(PANEL + '/api/public/me', { credentials: 'include' })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data && data.logged_in) renderUser(data);
+      else renderLogin();
+    })
+    .catch(renderLogin);
+})();

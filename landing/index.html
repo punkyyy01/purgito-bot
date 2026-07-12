@@ -30,9 +30,14 @@
       </svg>
       <span>Purgito</span>
     </a>
-    <a class="btn btn-primary nav-cta" href="https://discord.com/oauth2/authorize?client_id=1471724794411089920&permissions=414539926720&scope=bot%20applications.commands">
-      Añadir a Discord
-    </a>
+    <div class="nav-right">
+      <!-- Estado de sesión: lo inyecta script.js ya resuelto (login o avatar),
+           nunca se renderiza un estado provisorio que luego cambie de golpe. -->
+      <div id="auth-slot" class="auth-slot"></div>
+      <a class="btn btn-primary nav-cta" href="https://discord.com/oauth2/authorize?client_id=1471724794411089920&permissions=414539926720&scope=bot%20applications.commands">
+        Añadir a Discord
+      </a>
+    </div>
   </nav>
 
   <!-- ── HERO ────────────────────────────────────────── -->
