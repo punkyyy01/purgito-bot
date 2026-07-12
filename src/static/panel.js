@@ -584,6 +584,17 @@ async function loadPremium() {
             el('p', { class: 'dim' }, 'La mejor opción: pagas una vez y ahorras ~33% frente a 12 meses sueltos.')),
           checkoutBtn(box, 'annual', 'Suscribirse — Anual $39.99/año'))));
 
+    // TODO: /terms y /privacy no están expuestas como rutas en webapi.py todavía
+    // (solo existen docs/TERMS.md y docs/PRIVACY.md en el repo) — hay que
+    // servirlas antes de que estos links funcionen.
+    const legalNote = el('p', { class: 'premium-plan-fineprint' },
+      'Al continuar aceptas los ',
+      el('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Términos'),
+      ' y la ',
+      el('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Política de Privacidad'),
+      '.');
+    cardWide.append(legalNote);
+
     // Nota discreta: no compite por atención con las tarjetas de precio de arriba.
     const cancelNote = el('div', { class: 'premium-note' },
       icon('info'),

@@ -1,6 +1,6 @@
 # Condiciones del Servicio (Terms of Service)
 
-**Última actualización:** 29 de junio de 2026
+**Última actualización:** 11 de julio de 2026
 
 Al invitar **Purgatory Bot** a un servidor de Discord o interactuar con él, aceptas los presentes Términos del Servicio, así como los [Términos de Servicio](https://discord.com/terms) y la [Política de Privacidad](https://discord.com/privacy) de Discord.
 
@@ -44,9 +44,59 @@ Los administradores del servidor son responsables de moderar el uso del bot dent
 
 ---
 
-# 4. Disponibilidad del Servicio
+# 4. Suscripciones y pagos
 
-Purgatory Bot y los servicios asociados (como la galería web de GIFs) se proporcionan sin garantías de disponibilidad continua.
+Purgatory Bot ofrece un plan **premium** por servidor, contratable desde el dashboard (panel.purg4t0ry.com).
+
+## Qué desbloquea premium
+
+- Memes automáticos programados (no disponibles en el plan gratuito).
+- Límite ampliado de mensajes guardados en memoria (corpus).
+- Límite ampliado de mensajes de usuario en memoria.
+- Límite ampliado de GIFs guardados.
+- Colección ampliada de imágenes para memes.
+
+Los límites exactos de cada plan se muestran en el dashboard, en la sección Premium de cada servidor.
+
+## Procesamiento de pagos
+
+Los pagos se procesan a través de **Polar.sh**, que actúa como **Merchant of Record**: el contrato de compra se celebra entre quien paga y Polar.sh, no directamente con el desarrollador de Purgito. Aplican los [Términos de Polar](https://polar.sh/legal/terms) y los [Términos para compradores de Polar](https://polar.sh/legal/checkout-buyer-terms).
+
+## Precios
+
+Los precios vigentes se muestran en el dashboard al momento de la compra.
+
+## Prueba gratuita (trial)
+
+Existe una prueba gratuita de 7 días en el plan mensual. La prueba aplica una única vez por cliente (mismo comprador o método de pago), incluso si se activa en otro servidor.
+
+## Cancelación
+
+La suscripción se cancela desde el portal de cliente de Polar, cuyo acceso se envía por correo (de Polar, no de Purgito) al momento de suscribirse. No se cancela desde el dashboard de Purgito.
+
+## Reembolsos
+
+No se ofrecen reembolsos por el período ya iniciado o pagado. Cancelar la suscripción detiene únicamente la renovación futura: el acceso premium permanece activo hasta el final del período ya pagado.
+
+<!-- TODO: confirmar con Frambuesa la política de reembolsos — se documentó el comportamiento que ya sugiere el texto del panel (sin reembolso, acceso hasta fin del período pagado), pero no hay una política de reembolsos explícita en el código a confirmar. -->
+
+## Revocación
+
+El desarrollador de Purgito o Polar.sh pueden revocar el acceso premium en casos de fraude, contracargo (chargeback) o fallo de pago no resuelto.
+
+## Titularidad del premium
+
+El premium queda asociado al servidor (guild_id) que se suscribió, no a la cuenta de quien realizó el pago. Si esa persona abandona el servidor, el premium se mantiene activo.
+
+## Capacidad para contratar
+
+Para contratar premium se requiere tener capacidad legal para contratar, o contar con la autorización de un adulto responsable.
+
+---
+
+# 5. Disponibilidad del Servicio
+
+Purgatory Bot y los servicios asociados (como el dashboard de administración y la galería web de GIFs) se proporcionan sin garantías de disponibilidad continua.
 
 El desarrollador podrá, en cualquier momento y sin previo aviso:
 
@@ -57,7 +107,7 @@ El desarrollador podrá, en cualquier momento y sin previo aviso:
 
 ---
 
-# 5. Limitación de Responsabilidad
+# 6. Limitación de Responsabilidad
 
 En la máxima medida permitida por la legislación aplicable, el desarrollador no será responsable por:
 
@@ -69,7 +119,7 @@ En la máxima medida permitida por la legislación aplicable, el desarrollador n
 
 ---
 
-# 6. Modificaciones
+# 7. Modificaciones
 
 Estos Términos podrán modificarse para reflejar nuevas funciones, cambios técnicos o requisitos legales.
 
@@ -79,7 +129,7 @@ El uso continuado del bot después de dichos cambios constituirá la aceptación
 
 ---
 
-# 7. Contacto
+# 8. Contacto
 
 Si tienes dudas sobre estos Términos o deseas reportar un problema relacionado con el servicio, puedes contactar al desarrollador mediante:
 

@@ -1,6 +1,6 @@
 # Política de Privacidad (Privacy Policy)
 
-**Última actualización:** 29 de junio de 2026
+**Última actualización:** 11 de julio de 2026
 
 Esta Política describe cómo **Purgatory Bot** recopila, utiliza, almacena y protege la información necesaria para ofrecer sus funcionalidades.
 
@@ -56,8 +56,25 @@ El bot **no recopila**:
 - Contraseñas.
 - Correos electrónicos.
 - Direcciones IP.
-- Información de pago.
 - Datos personales ajenos a los proporcionados por la API oficial de Discord.
+
+Sobre datos de pago, ver la sección **"Pagos y suscripciones"** más abajo: Purgito no los almacena, pero el procesador de pagos (Polar.sh) sí los recolecta al procesar una compra.
+
+---
+
+## Pagos y suscripciones
+
+Cuando un servidor contrata premium a través del dashboard (panel.purg4t0ry.com), el pago lo procesa **Polar.sh**, no Purgito.
+
+**Purgito almacena únicamente:**
+
+- El ID del servidor (guild_id) que tiene premium activo.
+- La fecha en que se activó.
+- Una nota de texto identificando el plan (por ejemplo, "Polar — mensual" o "Polar — anual").
+
+Purgito **no almacena** número de tarjeta, datos de facturación, email ni nombre del comprador.
+
+**Polar.sh sí recolecta** los datos necesarios para procesar el pago (tarjeta, email, datos de facturación) bajo su propia [Política de Privacidad](https://polar.sh/legal/privacy). Esa relación de datos es entre quien compra y Polar.sh como procesador/Merchant of Record.
 
 ---
 
@@ -86,6 +103,7 @@ Actualmente pueden utilizarse:
 - **Cloudflare R2** para almacenamiento multimedia.
 - **Groq API** para generación de memes mediante IA.
 - **yt-dlp** para la obtención de contenido multimedia compatible.
+- **Polar.sh** como procesador de pagos y Merchant of Record para las suscripciones premium. Ver su [Política de Privacidad](https://polar.sh/legal/privacy).
 - Otros servicios estrictamente necesarios para el funcionamiento del bot.
 
 Cada proveedor procesa únicamente la información necesaria para prestar su servicio.
@@ -118,6 +136,8 @@ Cuando sea técnicamente posible, se atenderán las solicitudes razonables de el
 # 6. Menores de edad
 
 Purgatory Bot está destinado a usuarios que cumplen con los requisitos mínimos de edad establecidos por Discord.
+
+Para contratar premium se requiere tener capacidad legal para contratar, o contar con la autorización de un adulto responsable. Purgito no verifica esto activamente; es responsabilidad de quien realiza la compra.
 
 ---
 
