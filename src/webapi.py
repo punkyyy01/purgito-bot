@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
+import discord
 import markdown
 from aiohttp import web
 from aiohttp_session import get_session, setup as setup_session
@@ -46,15 +47,20 @@ from config import (
 from cogs.premium import is_premium_guild, set_premium, unset_premium
 from cogs.youtube import get_latest_video
 from db import (
+    add_embed_template,
     add_frase_especial,
     add_ignored_channel,
     add_meme_schedule,
     add_reaction_to_pool,
+    add_scheduled_announcement,
     add_youtube_sub,
     count_gif_urls,
+    delete_embed_template,
     delete_frase_especial,
     delete_gif_url_by_id,
+    embed_template_limit,
     get_chat_settings,
+    list_embed_templates,
     list_frases_especiales,
     list_gif_urls,
     list_ignored_channels,
@@ -69,6 +75,7 @@ from db import (
     save_gif_url,
     set_chat_mode,
     set_youtube_mention_role,
+    update_embed_template,
     update_last_video_id,
 )
 from gif_gallery import GIF_GALLERY_HTML
@@ -956,6 +963,262 @@ async def _api_server_gifs_delete(request: web.Request, guild_id: int) -> web.Re
     )
 
 
+# ---------------- API: embeds (editor del panel) ----------------
+
+# Límites reales de Discord para embeds (title/description/fields/etc.).
+_EMBED_MAX_TITLE = 256
+_EMBED_MAX_DESCRIPTION = 4096
+_EMBED_MAX_FIELDS = 25
+_EMBED_MAX_FIELD_NAME = 256
+_EMBED_MAX_FIELD_VALUE = 1024
+_EMBED_MAX_FOOTER = 2048
+_EMBED_MAX_AUTHOR = 256
+_EMBED_MAX_TOTAL = 6000
+
+
+def validate_embed_payload(embed: dict) -> str | None:
+    """Valida un dict de embed contra los límites reales de Discord.
+
+    Devuelve un mensaje de error o None si es válido. Efecto lateral
+    deliberado: si `color` viene como string hex ("#8B6EF5"), lo convierte a
+    int in place — discord.Embed.from_dict espera un int, no un hex con #.
+    """
+    if not isinstance(embed, dict):
+        return "embed inválido: se esperaba un objeto"
+
+    title = embed.get("title") or ""
+    description = embed.get("description") or ""
+    fields = embed.get("fields") or []
+    footer_text = (embed.get("footer") or {}).get("text") or ""
+    author_name = (embed.get("author") or {}).get("name") or ""
+
+    if not isinstance(title, str) or not isinstance(description, str):
+        return "title y description deben ser texto"
+    if len(title) > _EMBED_MAX_TITLE:
+        return f"title supera los {_EMBED_MAX_TITLE} caracteres"
+    if len(description) > _EMBED_MAX_DESCRIPTION:
+        return f"description supera los {_EMBED_MAX_DESCRIPTION} caracteres"
+    if not isinstance(fields, list) or len(fields) > _EMBED_MAX_FIELDS:
+        return f"fields admite máximo {_EMBED_MAX_FIELDS} elementos"
+    if len(footer_text) > _EMBED_MAX_FOOTER:
+        return f"footer.text supera los {_EMBED_MAX_FOOTER} caracteres"
+    if len(author_name) > _EMBED_MAX_AUTHOR:
+        return f"author.name supera los {_EMBED_MAX_AUTHOR} caracteres"
+
+    total = len(title) + len(description) + len(footer_text) + len(author_name)
+    for i, f in enumerate(fields):
+        if not isinstance(f, dict):
+            return f"field {i + 1} inválido"
+        name = f.get("name") or ""
+        value = f.get("value") or ""
+        if not isinstance(name, str) or not isinstance(value, str):
+            return f"field {i + 1}: name y value deben ser texto"
+        if not name.strip() or not value.strip():
+            return f"field {i + 1}: name y value no pueden estar vacíos"
+        if len(name) > _EMBED_MAX_FIELD_NAME:
+            return f"field {i + 1}: name supera los {_EMBED_MAX_FIELD_NAME} caracteres"
+        if len(value) > _EMBED_MAX_FIELD_VALUE:
+            return f"field {i + 1}: value supera los {_EMBED_MAX_FIELD_VALUE} caracteres"
+        total += len(name) + len(value)
+    if total > _EMBED_MAX_TOTAL:
+        return f"el embed supera los {_EMBED_MAX_TOTAL} caracteres en total"
+
+    # Discord rechaza embeds sin contenido visible.
+    if not any(
+        (title.strip(), description.strip(), fields, footer_text.strip(),
+         author_name.strip(), embed.get("image"), embed.get("thumbnail"))
+    ):
+        return "el embed está vacío: completa al menos un campo"
+
+    color = embed.get("color")
+    if isinstance(color, str):
+        try:
+            color = int(color.lstrip("#"), 16)
+        except ValueError:
+            return "color inválido: usa formato #RRGGBB"
+        embed["color"] = color
+    if color is not None and not (
+        isinstance(color, int) and 0 <= color <= 0xFFFFFF
+    ):
+        return "color inválido: fuera de rango"
+    return None
+
+
+def _embed_target_channel(request: web.Request, guild_id: int, channel_id: int | None):
+    """(canal, None) si el canal es del guild y el bot puede mandar embeds ahí;
+    si no, (None, respuesta de error)."""
+    if channel_id is None:
+        return None, web.json_response({"error": "channel_id inválido"}, status=400)
+    guild = _bot_guild(request, guild_id)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return None, web.json_response(
+            {"error": "el canal no existe en este servidor"}, status=400
+        )
+    perms = channel.permissions_for(guild.me)
+    if not perms.send_messages or not perms.embed_links:
+        return None, web.json_response(
+            {"error": "el bot no tiene permiso de enviar mensajes/embeds en ese canal"},
+            status=403,
+        )
+    return channel, None
+
+
+@guild_api
+async def _api_embeds_send(request: web.Request, guild_id: int) -> web.Response:
+    ip = _client_ip(request)
+    if not _rate_ok(_rate_post, ip, 5):
+        return web.json_response({"error": "rate limit"}, status=429)
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "body inválido"}, status=400)
+    embed = data.get("embed")
+    err = validate_embed_payload(embed)
+    if err:
+        return web.json_response({"error": err}, status=400)
+    channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
+    if denied is not None:
+        return denied
+    try:
+        await channel.send(embed=discord.Embed.from_dict(embed))
+    except discord.HTTPException as e:
+        # Típicamente una URL de imagen/ícono que Discord rechaza.
+        return web.json_response(
+            {"error": f"Discord rechazó el embed: {e.text or e}"}, status=400
+        )
+    return web.json_response({"sent": True})
+
+
+@guild_api
+async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Response:
+    """Programa un embed como anuncio (misma tabla/worker que los anuncios de
+    texto de /settings, con embed_json en la columna nueva)."""
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "body inválido"}, status=400)
+    embed = data.get("embed")
+    err = validate_embed_payload(embed)
+    if err:
+        return web.json_response({"error": err}, status=400)
+    channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
+    if denied is not None:
+        return denied
+
+    mode = data.get("mode")
+    interval_minutes = hour = minute = None
+    if mode == "interval":
+        interval_minutes = _to_int(data.get("interval_minutes"))
+        # Mismo rango que la UI de anuncios de /settings (5-1440 minutos).
+        if interval_minutes is None or not (5 <= interval_minutes <= 1440):
+            return web.json_response(
+                {"error": "interval_minutes debe estar entre 5 y 1440"}, status=400
+            )
+    elif mode == "daily":
+        hour = _to_int(data.get("hour"))
+        minute = _to_int(data.get("minute"))
+        if hour is None or minute is None or not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return web.json_response({"error": "hora inválida (HH 0-23, MM 0-59)"}, status=400)
+    else:
+        return web.json_response({"error": "mode debe ser 'interval' o 'daily'"}, status=400)
+
+    session = await get_session(request)
+    # message no puede ser NULL y es lo que muestra el listado de /settings en
+    # Discord: se usa el título del embed como descripción legible.
+    preview = (embed.get("title") or "").strip()[:60] or "[embed]"
+    new_id = await add_scheduled_announcement(
+        guild_id,
+        channel.id,
+        preview,
+        mode,
+        int(session["user_id"]),
+        interval_minutes=interval_minutes,
+        hour=hour,
+        minute=minute,
+        embed_json=json.dumps(embed),
+    )
+    if new_id is None:
+        return web.json_response(
+            {"error": "límite de anuncios programados alcanzado — elimina uno desde /settings en Discord"},
+            status=409,
+        )
+    return web.json_response({"id": new_id})
+
+
+def _template_row_to_json(t: dict) -> dict:
+    return {
+        "id": t["id"],
+        "name": t["name"],
+        "embed": json.loads(t["embed_json"]),
+        "created_at": t["created_at"],
+        "updated_at": t["updated_at"],
+    }
+
+
+@guild_api
+async def _api_embed_templates_get(request: web.Request, guild_id: int) -> web.Response:
+    templates = await list_embed_templates(guild_id)
+    return web.json_response(
+        {
+            "templates": [_template_row_to_json(t) for t in templates],
+            "total": len(templates),
+            "limit": embed_template_limit(guild_id),
+        }
+    )
+
+
+def _template_body(data: dict | None) -> tuple[str, dict] | web.Response:
+    """Valida el body común de POST/PUT de plantillas: (name, embed) o error."""
+    if data is None:
+        return web.json_response({"error": "body inválido"}, status=400)
+    name = str(data.get("name") or "").strip()[:100]
+    if not name:
+        return web.json_response({"error": "la plantilla necesita un nombre"}, status=400)
+    embed = data.get("embed")
+    err = validate_embed_payload(embed)
+    if err:
+        return web.json_response({"error": err}, status=400)
+    return name, embed
+
+
+@guild_api
+async def _api_embed_templates_post(request: web.Request, guild_id: int) -> web.Response:
+    parsed = _template_body(await _json_body(request))
+    if isinstance(parsed, web.Response):
+        return parsed
+    name, embed = parsed
+    new_id = await add_embed_template(guild_id, name, json.dumps(embed))
+    if new_id is None:
+        return web.json_response(
+            {"error": "límite de plantillas alcanzado — elimina una antes de guardar otra"},
+            status=409,
+        )
+    return web.json_response({"id": new_id})
+
+
+@guild_api
+async def _api_embed_template_put(request: web.Request, guild_id: int) -> web.Response:
+    template_id = _to_int(request.match_info.get("template_id"))
+    if template_id is None:
+        return web.json_response({"error": "template_id inválido"}, status=400)
+    parsed = _template_body(await _json_body(request))
+    if isinstance(parsed, web.Response):
+        return parsed
+    name, embed = parsed
+    updated = await update_embed_template(template_id, guild_id, name, json.dumps(embed))
+    if not updated:
+        return web.json_response({"error": "plantilla no encontrada"}, status=404)
+    return web.json_response({"updated": True})
+
+
+@guild_api
+async def _api_embed_template_delete(request: web.Request, guild_id: int) -> web.Response:
+    template_id = _to_int(request.match_info.get("template_id"))
+    if template_id is None:
+        return web.json_response({"error": "template_id inválido"}, status=400)
+    deleted = await delete_embed_template(template_id, guild_id)
+    return web.json_response({"deleted": deleted})
+
+
 # ---------------- API: administración (solo bot owner) ----------------
 
 
@@ -1288,6 +1551,16 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.router.add_post(f"{base}/settings/gifs", _api_server_gifs_post)
         app.router.add_delete(
             f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete
+        )
+        app.router.add_post(f"{base}/embeds/send", _api_embeds_send)
+        app.router.add_post(f"{base}/embeds/schedule", _api_embeds_schedule)
+        app.router.add_get(f"{base}/embeds/templates", _api_embed_templates_get)
+        app.router.add_post(f"{base}/embeds/templates", _api_embed_templates_post)
+        app.router.add_put(
+            f"{base}/embeds/templates/{{template_id}}", _api_embed_template_put
+        )
+        app.router.add_delete(
+            f"{base}/embeds/templates/{{template_id}}", _api_embed_template_delete
         )
         app.router.add_get(f"{base}/premium", _api_premium_get)
         app.router.add_post(f"{base}/premium/checkout", _api_premium_checkout)

@@ -145,6 +145,7 @@ const ICONS = {
   image:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
   film:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>',
   star:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+  layout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
   info:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
 };
 
@@ -160,6 +161,7 @@ const CATEGORIES = [
   { key: 'reacciones', icon: 'smile',   label: 'Reacciones' },
   { key: 'frases',     icon: 'sparkle', label: 'Frases' },
   { key: 'youtube',    icon: 'play',    label: 'YouTube' },
+  { key: 'embeds',     icon: 'layout',  label: 'Embeds' },
   { key: 'memes',      icon: 'image',   label: 'Memes', premium: true },
   { key: 'gifs',       icon: 'film',    label: 'GIFs' },
   { key: 'premium',    icon: 'star',    label: 'Premium' },
@@ -245,8 +247,8 @@ async function loadServerHead() {
 
 const LOADERS = {
   chat: loadChat, corpus: loadCorpus, reacciones: loadReacciones,
-  frases: loadFrases, youtube: loadYouTube, memes: loadMemes, gifs: loadGifs,
-  premium: loadPremium,
+  frases: loadFrases, youtube: loadYouTube, embeds: loadEmbeds,
+  memes: loadMemes, gifs: loadGifs, premium: loadPremium,
 };
 
 function activate(key, push) {
@@ -455,6 +457,355 @@ async function loadYouTube() {
         },
       }, 'Agregar')));
   } catch (e) { renderError(box, e); }
+}
+
+// ---------- Embeds ----------
+
+// Espejo de los límites de validate_embed_payload (webapi.py) para dar
+// feedback inmediato sin esperar el 400 del server.
+const EMBED_LIMITS = {
+  title: 256, description: 4096, fields: 25, fieldName: 256,
+  fieldValue: 1024, footer: 2048, author: 256, total: 6000,
+};
+
+let _embedTab = 'editor';
+// Estado del editor: persiste al cambiar de sub-vista (así "Cargar en el
+// editor" desde plantillas no se pierde al navegar).
+let _embed = null;
+
+function blankEmbed() {
+  return {
+    title: '', description: '', color: '#8B6EF5',
+    authorName: '', authorIcon: '', footerText: '', footerIcon: '',
+    thumbnail: '', image: '', fields: [], templateId: null, templateName: '',
+  };
+}
+
+// Estado del formulario -> dict de embed estilo API de Discord (solo lo no vacío).
+function embedDict(s) {
+  const e = {};
+  if (s.title.trim()) e.title = s.title.trim();
+  if (s.description.trim()) e.description = s.description.trim();
+  if (s.color) e.color = s.color; // hex "#RRGGBB"; el backend lo convierte a int
+  if (s.authorName.trim()) {
+    e.author = { name: s.authorName.trim() };
+    if (s.authorIcon.trim()) e.author.icon_url = s.authorIcon.trim();
+  }
+  if (s.footerText.trim()) {
+    e.footer = { text: s.footerText.trim() };
+    if (s.footerIcon.trim()) e.footer.icon_url = s.footerIcon.trim();
+  }
+  if (s.thumbnail.trim()) e.thumbnail = { url: s.thumbnail.trim() };
+  if (s.image.trim()) e.image = { url: s.image.trim() };
+  const fields = s.fields
+    .filter(f => f.name.trim() && f.value.trim())
+    .map(f => ({ name: f.name.trim(), value: f.value.trim(), inline: !!f.inline }));
+  if (fields.length) e.fields = fields;
+  return e;
+}
+
+// Inverso: dict de embed guardado -> estado del formulario.
+function embedToState(e, templateId, templateName) {
+  const s = blankEmbed();
+  s.title = e.title || '';
+  s.description = e.description || '';
+  if (typeof e.color === 'number') s.color = '#' + e.color.toString(16).padStart(6, '0');
+  else if (typeof e.color === 'string') s.color = e.color;
+  s.authorName = (e.author && e.author.name) || '';
+  s.authorIcon = (e.author && e.author.icon_url) || '';
+  s.footerText = (e.footer && e.footer.text) || '';
+  s.footerIcon = (e.footer && e.footer.icon_url) || '';
+  s.thumbnail = (e.thumbnail && e.thumbnail.url) || '';
+  s.image = (e.image && e.image.url) || '';
+  s.fields = (e.fields || []).map(f => ({ name: f.name || '', value: f.value || '', inline: !!f.inline }));
+  s.templateId = templateId || null;
+  s.templateName = templateName || '';
+  return s;
+}
+
+function validateEmbedClient(e) {
+  if ((e.title || '').length > EMBED_LIMITS.title) return `El título supera los ${EMBED_LIMITS.title} caracteres.`;
+  if ((e.description || '').length > EMBED_LIMITS.description) return `La descripción supera los ${EMBED_LIMITS.description} caracteres.`;
+  const fields = e.fields || [];
+  if (fields.length > EMBED_LIMITS.fields) return `Máximo ${EMBED_LIMITS.fields} fields.`;
+  let total = (e.title || '').length + (e.description || '').length
+    + ((e.footer && e.footer.text) || '').length + ((e.author && e.author.name) || '').length;
+  for (const f of fields) {
+    if (f.name.length > EMBED_LIMITS.fieldName) return `Un field tiene el nombre demasiado largo (máx ${EMBED_LIMITS.fieldName}).`;
+    if (f.value.length > EMBED_LIMITS.fieldValue) return `Un field tiene el valor demasiado largo (máx ${EMBED_LIMITS.fieldValue}).`;
+    total += f.name.length + f.value.length;
+  }
+  if (((e.footer && e.footer.text) || '').length > EMBED_LIMITS.footer) return `El footer supera los ${EMBED_LIMITS.footer} caracteres.`;
+  if (((e.author && e.author.name) || '').length > EMBED_LIMITS.author) return `El autor supera los ${EMBED_LIMITS.author} caracteres.`;
+  if (total > EMBED_LIMITS.total) return `El embed supera los ${EMBED_LIMITS.total} caracteres en total.`;
+  if (!e.title && !e.description && !fields.length && !e.image && !e.thumbnail && !e.author && !e.footer) {
+    return 'El embed está vacío: completa al menos un campo.';
+  }
+  return null;
+}
+
+// Imagen que se oculta sola si la URL no carga (igual que hace Discord).
+function embedImg(attrs) {
+  const img = el('img', attrs);
+  img.onerror = () => { img.style.display = 'none'; };
+  return img;
+}
+
+// Preview puro HTML/CSS de un embed de Discord; sin llamada al backend.
+function renderEmbedPreview(e) {
+  if (!Object.keys(e).length) return emptyState('El preview aparece aquí a medida que completas el formulario.');
+  const main = el('div', { class: 'd-embed-main' });
+  if (e.author) {
+    main.append(el('div', { class: 'd-embed-author' },
+      e.author.icon_url ? embedImg({ src: e.author.icon_url, alt: '' }) : null,
+      e.author.name));
+  }
+  if (e.title) main.append(el('div', { class: 'd-embed-title' }, e.title));
+  if (e.description) main.append(el('div', { class: 'd-embed-desc' }, e.description));
+  if (e.fields) {
+    const grid = el('div', { class: 'd-embed-fields' });
+    for (const f of e.fields) {
+      grid.append(el('div', { class: 'd-embed-field' + (f.inline ? ' inline' : '') },
+        el('div', { class: 'd-embed-field-name' }, f.name),
+        el('div', { class: 'd-embed-field-value' }, f.value)));
+    }
+    main.append(grid);
+  }
+  const body = el('div', { class: 'd-embed-body' }, main);
+  if (e.thumbnail) body.append(el('div', { class: 'd-embed-thumb' }, embedImg({ src: e.thumbnail.url, alt: '' })));
+  if (e.image) body.append(el('div', { class: 'd-embed-image' }, embedImg({ src: e.image.url, alt: '' })));
+  if (e.footer) {
+    body.append(el('div', { class: 'd-embed-footer' },
+      e.footer.icon_url ? embedImg({ src: e.footer.icon_url, alt: '' }) : null,
+      e.footer.text));
+  }
+  const color = typeof e.color === 'string' ? e.color : '#8B6EF5';
+  return el('div', { class: 'd-embed' },
+    el('div', { class: 'd-embed-bar', style: 'background:' + color }), body);
+}
+
+async function loadEmbeds() {
+  const box = content();
+  const tabs = el('div', { class: 'embed-tabs' },
+    el('div', { class: 'embed-tab' + (_embedTab === 'editor' ? ' active' : ''), onclick: () => { _embedTab = 'editor'; loadEmbeds(); } }, 'Crear / Enviar'),
+    el('div', { class: 'embed-tab' + (_embedTab === 'templates' ? ' active' : ''), onclick: () => { _embedTab = 'templates'; loadEmbeds(); } }, 'Mis plantillas'));
+  const view = el('div', {});
+  box.append(tabs, view);
+  if (_embedTab === 'editor') await renderEmbedEditor(view);
+  else await renderEmbedTemplates(view);
+}
+
+async function renderEmbedEditor(box) {
+  box.append(spinner());
+  let channels;
+  try { channels = await getChannels(); }
+  catch (e) { renderError(box, e); return; }
+  box.innerHTML = '';
+
+  if (!_embed) _embed = blankEmbed();
+  const s = _embed;
+
+  const previewBox = el('div', {});
+  function updatePreview() {
+    previewBox.innerHTML = '';
+    previewBox.append(renderEmbedPreview(embedDict(s)));
+  }
+
+  function bound(tag, key, attrs) {
+    const node = el(tag, { ...attrs, value: s[key] });
+    if (tag === 'textarea') node.value = s[key];
+    node.oninput = () => { s[key] = node.value; updatePreview(); };
+    return node;
+  }
+
+  function fieldBlock(label, node) {
+    return el('div', { class: 'field' }, el('label', {}, label), node);
+  }
+
+  // --- fields dinámicos ---
+  const fieldsBox = el('div', {});
+  const addFieldBtn = el('button', {
+    class: 'btn btn-secondary btn-sm',
+    onclick: () => { s.fields.push({ name: '', value: '', inline: false }); renderFields(); updatePreview(); },
+  }, '+ Agregar field');
+
+  function renderFields() {
+    fieldsBox.innerHTML = '';
+    s.fields.forEach((f, i) => {
+      const name = el('input', { type: 'text', placeholder: 'Nombre', maxlength: String(EMBED_LIMITS.fieldName), value: f.name });
+      name.oninput = () => { f.name = name.value; updatePreview(); };
+      const value = el('input', { type: 'text', placeholder: 'Valor', maxlength: String(EMBED_LIMITS.fieldValue), value: f.value });
+      value.oninput = () => { f.value = value.value; updatePreview(); };
+      const inline = el('input', { type: 'checkbox', checked: f.inline });
+      inline.onchange = () => { f.inline = inline.checked; updatePreview(); };
+      fieldsBox.append(el('div', { class: 'embed-field-row' },
+        name, value,
+        el('label', { class: 'toggle' }, inline, 'inline'),
+        el('button', {
+          class: 'btn btn-danger btn-sm',
+          onclick: () => { s.fields.splice(i, 1); renderFields(); updatePreview(); },
+        }, '✗')));
+    });
+    addFieldBtn.disabled = s.fields.length >= EMBED_LIMITS.fields;
+  }
+  renderFields();
+
+  // --- destino y modo de envío ---
+  const chSel = channelSelect(channels, null, 'Canal destino…');
+  const modeNow = el('input', { type: 'radio', name: 'embedMode', checked: true });
+  const modeSched = el('input', { type: 'radio', name: 'embedMode' });
+  const schedType = el('select', {},
+    el('option', { value: 'interval' }, 'Por intervalo'),
+    el('option', { value: 'daily' }, 'A hora fija'));
+  const intervalInput = el('input', { type: 'number', min: '5', max: '1440', value: '60', style: 'width:110px' });
+  const timeInput = el('input', { type: 'time', value: '09:00' });
+  const schedControls = el('div', { class: 'add-row', style: 'display:none;margin-top:8px' },
+    schedType, intervalInput, timeInput);
+
+  function syncSched() {
+    schedControls.style.display = modeSched.checked ? '' : 'none';
+    const daily = schedType.value === 'daily';
+    intervalInput.style.display = daily ? 'none' : '';
+    timeInput.style.display = daily ? '' : 'none';
+    sendBtn.textContent = modeSched.checked ? 'Programar' : 'Enviar ahora';
+  }
+  modeNow.onchange = modeSched.onchange = schedType.onchange = syncSched;
+
+  const sendBtn = el('button', {
+    class: 'btn btn-primary',
+    onclick: async () => {
+      const e = embedDict(s);
+      const err = validateEmbedClient(e);
+      if (err) { toast(err, 'err'); return; }
+      if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
+      try {
+        if (modeSched.checked) {
+          const body = { channel_id: chSel.value, embed: e, mode: schedType.value };
+          if (schedType.value === 'interval') {
+            body.interval_minutes = parseInt(intervalInput.value, 10);
+          } else {
+            const [h, m] = timeInput.value.split(':');
+            body.hour = parseInt(h, 10); body.minute = parseInt(m, 10);
+          }
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/schedule`, { method: 'POST', body });
+          toast('Embed programado', 'ok');
+        } else {
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embed: e } });
+          toast('Embed enviado', 'ok');
+        }
+      } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
+    },
+  }, 'Enviar ahora');
+
+  const saveBtn = el('button', {
+    class: 'btn btn-secondary',
+    onclick: async () => {
+      const e = embedDict(s);
+      const err = validateEmbedClient(e);
+      if (err) { toast(err, 'err'); return; }
+      const name = (prompt('Nombre de la plantilla:', s.templateName || '') || '').trim();
+      if (!name) return;
+      try {
+        if (s.templateId) {
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${s.templateId}`, { method: 'PUT', body: { name, embed: e } });
+          toast('Plantilla actualizada', 'ok');
+        } else {
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, embed: e } });
+          s.templateId = resp.id;
+          toast('Plantilla guardada', 'ok');
+        }
+        s.templateName = name;
+      } catch (err2) { toast(err2.message, err2.status === 409 ? 'warn' : 'err'); }
+    },
+  }, 'Guardar como plantilla');
+
+  const clearBtn = el('button', {
+    class: 'btn btn-secondary',
+    onclick: () => { _embed = blankEmbed(); loadEmbeds(); },
+  }, 'Limpiar');
+
+  const form = el('div', { class: 'embed-form' },
+    fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
+    fieldBlock('Descripción', bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) })),
+    fieldBlock('Color', bound('input', 'color', { type: 'color' })),
+    el('div', { class: 'embed-two' },
+      fieldBlock('Autor', bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) })),
+      fieldBlock('URL del ícono del autor', bound('input', 'authorIcon', { type: 'url', placeholder: 'https://…' }))),
+    el('div', { class: 'embed-two' },
+      fieldBlock('Footer', bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) })),
+      fieldBlock('URL del ícono del footer', bound('input', 'footerIcon', { type: 'url', placeholder: 'https://…' }))),
+    el('div', { class: 'embed-two' },
+      fieldBlock('Thumbnail (URL)', bound('input', 'thumbnail', { type: 'url', placeholder: 'https://…' })),
+      fieldBlock('Imagen grande (URL)', bound('input', 'image', { type: 'url', placeholder: 'https://…' }))),
+    el('div', { class: 'field' }, el('label', {}, 'Fields'), fieldsBox, addFieldBtn),
+    el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
+    el('div', { class: 'field' },
+      el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
+      el('label', { class: 'toggle' }, modeSched, 'Programar'),
+      schedControls),
+    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn));
+
+  box.append(el('div', { class: 'embed-layout' },
+    form,
+    el('div', { class: 'd-embed-wrap' }, el('p', { class: 'dim', style: 'margin-top:0' }, 'Preview'), previewBox)));
+  updatePreview();
+  syncSched();
+}
+
+async function renderEmbedTemplates(box) {
+  box.append(spinner());
+  let data;
+  try { data = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`); }
+  catch (e) { renderError(box, e); return; }
+  box.innerHTML = '';
+
+  box.append(el('p', { class: 'dim gif-stats' },
+    el('strong', { class: 'stat-num' }, String(data.total)), ` / ${data.limit} plantillas usadas`));
+
+  if (!data.templates.length) {
+    box.append(emptyState('Todavía no hay plantillas guardadas — crea una desde "Crear / Enviar".'));
+    return;
+  }
+
+  const list = el('ul', { class: 'item-list' });
+  for (const t of data.templates) {
+    const e = t.embed;
+    const color = typeof e.color === 'number' ? '#' + e.color.toString(16).padStart(6, '0')
+      : (typeof e.color === 'string' ? e.color : '#8B6EF5');
+    const snippet = e.title || e.description || (e.fields && e.fields[0] && e.fields[0].name) || '(sin texto)';
+    list.append(el('li', {},
+      el('span', {},
+        el('span', { class: 'tpl-dot', style: 'background:' + color }), ' ',
+        el('strong', {}, t.name), ' — ',
+        el('span', { class: 'dim' }, snippet.slice(0, 60))),
+      el('button', {
+        class: 'btn btn-secondary btn-sm',
+        onclick: () => { _embed = embedToState(e, t.id, t.name); _embedTab = 'editor'; loadEmbeds(); },
+      }, 'Cargar en el editor'),
+      el('button', {
+        class: 'btn btn-secondary btn-sm',
+        onclick: async () => {
+          const name = (prompt('Nuevo nombre:', t.name) || '').trim();
+          if (!name || name === t.name) return;
+          try {
+            await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${t.id}`, { method: 'PUT', body: { name, embed: e } });
+            loadEmbeds();
+          } catch (err) { toast(err.message, 'err'); }
+        },
+      }, 'Renombrar'),
+      el('button', {
+        class: 'btn btn-danger btn-sm',
+        onclick: async () => {
+          if (!confirm(`¿Eliminar la plantilla "${t.name}"?`)) return;
+          try {
+            await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${t.id}`, { method: 'DELETE' });
+            toast('Plantilla eliminada', 'ok');
+            loadEmbeds();
+          } catch (err) { toast(err.message, 'err'); }
+        },
+      }, 'Eliminar')));
+  }
+  box.append(list);
 }
 
 // ---------- Memes (premium) ----------

@@ -125,9 +125,20 @@ CREATE TABLE IF NOT EXISTS scheduled_announcements (
     minute INTEGER,
     last_sent_at TEXT,
     created_by INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    embed_json TEXT DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_announcements_guild ON scheduled_announcements(guild_id);
+
+CREATE TABLE IF NOT EXISTS embed_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    embed_json TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_embed_templates_guild ON embed_templates(guild_id);
 
 CREATE TABLE IF NOT EXISTS corpus_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +240,13 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna welcome_channel_id ya existe en guild_auto_refeed")
+    try:
+        await _db.execute(
+            "ALTER TABLE scheduled_announcements ADD COLUMN embed_json TEXT DEFAULT NULL"
+        )
+        await _db.commit()
+    except Exception:
+        log.debug("Columna embed_json ya existe en scheduled_announcements")
     await _db.commit()
     flag_path = os.path.join(DATA_DIR, ".images_wiped_v2")
     if not os.path.exists(flag_path):
@@ -882,10 +900,15 @@ async def add_scheduled_announcement(
     interval_minutes: int | None = None,
     hour: int | None = None,
     minute: int | None = None,
+    embed_json: str | None = None,
 ) -> int | None:
     """Crea un anuncio programado. Devuelve el id insertado, o None si el guild
     ya llegó al límite de anuncios (a diferencia de gifs/imágenes, acá no se
-    evictan anuncios viejos: el admin tiene que borrar uno a mano primero)."""
+    evictan anuncios viejos: el admin tiene que borrar uno a mano primero).
+
+    embed_json None = anuncio de texto plano (comportamiento clásico); con
+    contenido, el loop de anuncios envía discord.Embed.from_dict en vez del
+    texto de `message`."""
     max_announcements = _limit_for_guild(
         guild_id,
         "MAX_ANNOUNCEMENTS_PER_GUILD_FREE",
@@ -904,8 +927,8 @@ async def add_scheduled_announcement(
             return None
         cursor = await db.execute(
             "INSERT INTO scheduled_announcements "
-            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by, embed_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 guild_id,
                 channel_id,
@@ -915,6 +938,7 @@ async def add_scheduled_announcement(
                 hour,
                 minute,
                 created_by,
+                embed_json,
             ),
         )
         await db.commit()
@@ -937,7 +961,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
         "SELECT id, channel_id, message, mode, interval_minutes, hour, minute, "
-        "last_sent_at, created_by, created_at "
+        "last_sent_at, created_by, created_at, embed_json "
         "FROM scheduled_announcements WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
@@ -954,6 +978,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
             "last_sent_at": r[7],
             "created_by": r[8],
             "created_at": r[9],
+            "embed_json": r[10],
         }
         for r in rows
     ]
@@ -965,7 +990,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
     porque hay que comparar hora:minuto y la FECHA local (no solo un delta)."""
     db = await get_db()
     async with db.execute(
-        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at "
+        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at, embed_json "
         "FROM scheduled_announcements "
         "WHERE (mode='interval' AND (last_sent_at IS NULL "
         "       OR datetime(last_sent_at, '+' || interval_minutes || ' minutes') <= datetime('now'))) "
@@ -986,6 +1011,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
             "hour": r[6],
             "minute": r[7],
             "last_sent_at": r[8],
+            "embed_json": r[9],
         }
         if item["mode"] == "interval":
             due.append(item)
@@ -1002,6 +1028,109 @@ async def get_due_scheduled_announcements() -> list[dict]:
                 continue
         due.append(item)
     return due
+
+
+# ─── Plantillas de embeds ────────────────────────────────────────────────────
+
+
+def embed_template_limit(guild_id: int | None) -> int:
+    """Máximo de plantillas de embed guardables según plan del guild."""
+    return _limit_for_guild(
+        guild_id,
+        "MAX_EMBED_TEMPLATES_PER_GUILD_FREE",
+        "MAX_EMBED_TEMPLATES_PER_GUILD_PREMIUM",
+        5,
+        25,
+    )
+
+
+async def add_embed_template(guild_id: int, name: str, embed_json: str) -> int | None:
+    """Guarda una plantilla de embed. Devuelve el id insertado, o None si el
+    guild ya llegó al límite (mismo criterio que anuncios: se rechaza el alta,
+    no se evicta la plantilla más vieja)."""
+    max_templates = embed_template_limit(guild_id)
+    db = await get_db()
+    async with _db_lock:
+        async with db.execute(
+            "SELECT COUNT(*) FROM embed_templates WHERE guild_id=?", (guild_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row and int(row[0]) >= max_templates:
+            return None
+        cursor = await db.execute(
+            "INSERT INTO embed_templates (guild_id, name, embed_json) VALUES (?, ?, ?)",
+            (guild_id, name, embed_json),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def list_embed_templates(guild_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, name, embed_json, created_at, updated_at "
+        "FROM embed_templates WHERE guild_id=? ORDER BY id",
+        (guild_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "embed_json": r[2],
+            "created_at": r[3],
+            "updated_at": r[4],
+        }
+        for r in rows
+    ]
+
+
+async def get_embed_template(template_id: int, guild_id: int) -> dict | None:
+    """El guild_id en el WHERE es chequeo de propiedad, no solo de existencia:
+    sin él, un guild podría leer/borrar plantillas de otro por IDOR."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, name, embed_json, created_at, updated_at "
+        "FROM embed_templates WHERE id=? AND guild_id=?",
+        (template_id, guild_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "name": row[1],
+        "embed_json": row[2],
+        "created_at": row[3],
+        "updated_at": row[4],
+    }
+
+
+async def update_embed_template(
+    template_id: int, guild_id: int, name: str, embed_json: str
+) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "UPDATE embed_templates SET name=?, embed_json=?, updated_at=datetime('now') "
+            "WHERE id=? AND guild_id=?",
+            (name, embed_json, template_id, guild_id),
+        )
+        updated = cursor.rowcount > 0
+        await db.commit()
+    return updated
+
+
+async def delete_embed_template(template_id: int, guild_id: int) -> bool:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM embed_templates WHERE id=? AND guild_id=?",
+            (template_id, guild_id),
+        )
+        deleted = cursor.rowcount > 0
+        await db.commit()
+    return deleted
 
 
 async def update_announcement_last_sent(announcement_id: int) -> None:
@@ -1414,6 +1543,7 @@ async def purge_guild_data(guild_id: int) -> None:
         "ignored_channels",
         "meme_schedule",
         "scheduled_announcements",
+        "embed_templates",
         "frases_especiales",
         "reaction_pool",
         "premium_guilds",

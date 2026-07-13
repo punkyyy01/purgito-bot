@@ -3,6 +3,7 @@ por intervalo o a una hora fija (ver /settings > Anuncios). Distinto de
 frases_especiales (esas se mezclan al azar en el chat Markov)."""
 
 import asyncio
+import json
 import logging
 
 import discord
@@ -32,9 +33,17 @@ class Anuncios(commands.Cog):
                 channel = self.bot.get_channel(item["channel_id"])
                 if not isinstance(channel, discord.TextChannel):
                     return
-                if not channel.permissions_for(channel.guild.me).send_messages:
+                perms = channel.permissions_for(channel.guild.me)
+                if not perms.send_messages:
                     return
-                await channel.send(item["message"])
+                if item.get("embed_json"):
+                    # Anuncio-embed creado desde el editor del panel web.
+                    if not perms.embed_links:
+                        return
+                    embed = discord.Embed.from_dict(json.loads(item["embed_json"]))
+                    await channel.send(embed=embed)
+                else:
+                    await channel.send(item["message"])
                 await update_announcement_last_sent(item["id"])
             except Exception:
                 log.exception("Error enviando anuncio programado %s", item["id"])
