@@ -11,11 +11,13 @@ import discord
 from discord.ext import commands, tasks
 
 from db import (
+    extract_send_options,
     get_due_scheduled_announcements,
     normalize_embeds_json,
     update_announcement_last_sent,
 )
 from layout_v2 import build_layout_view
+from message_options import send_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +49,8 @@ class Anuncios(commands.Cog):
                     if not perms.embed_links:
                         return
                     view = build_layout_view(json.loads(item["embed_json"]))
-                    await channel.send(view=view)
+                    extra = send_kwargs(extract_send_options(item["embed_json"]))
+                    await channel.send(view=view, **extra)
                 elif item.get("embed_json"):
                     # Embeds clásicos. El JSON es siempre una lista (Discord
                     # admite hasta 10); normalize_embeds_json envuelve el formato
@@ -58,7 +61,8 @@ class Anuncios(commands.Cog):
                         discord.Embed.from_dict(e)
                         for e in normalize_embeds_json(item["embed_json"])
                     ]
-                    await channel.send(embeds=embeds)
+                    extra = send_kwargs(extract_send_options(item["embed_json"]))
+                    await channel.send(embeds=embeds, **extra)
                 else:
                     await channel.send(item["message"])
                 await update_announcement_last_sent(item["id"])

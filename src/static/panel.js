@@ -481,7 +481,8 @@ let _layoutDoc = null;
 
 function blankDoc() {
   return { embeds: [blankEmbed()], active: 0, templateId: null, templateName: '',
-           channelId: '', sendMode: 'now', schedType: 'interval', interval: '60', time: '09:00' };
+           channelId: '', sendMode: 'now', schedType: 'interval', interval: '60', time: '09:00',
+           sendOpts: blankSendOpts() };
 }
 
 function blankEmbed() {
@@ -537,12 +538,13 @@ function embedToState(e) {
 }
 
 // Doc a partir de un array de embeds guardados (plantilla).
-function docFromEmbeds(embeds, templateId, templateName) {
+function docFromEmbeds(embeds, templateId, templateName, sendOptions) {
   const doc = blankDoc();
   doc.embeds = (embeds && embeds.length ? embeds : [{}]).map(embedToState);
   doc.active = 0;
   doc.templateId = templateId || null;
   doc.templateName = templateName || '';
+  doc.sendOpts = sendOptsFromApi(sendOptions);
   return doc;
 }
 
@@ -618,6 +620,525 @@ function embedImg(attrs) {
   return img;
 }
 
+// ---------- Fase 5: helpers compartidos del editor ----------
+
+// Modal genérico del panel (historial, JSON). Cierra con ✗, click afuera o Escape.
+function panelModal(title, body) {
+  const overlay = el('div', {
+    class: 'modal-overlay',
+    onclick: (e) => { if (e.target === overlay) overlay.remove(); },
+  },
+    el('div', { class: 'modal-box' },
+      el('div', { class: 'modal-head' },
+        el('strong', {}, title),
+        el('button', { class: 'btn btn-secondary btn-sm', onclick: () => overlay.remove() }, '✗')),
+      body));
+  overlay.tabIndex = -1;
+  overlay.onkeydown = (e) => { if (e.key === 'Escape') overlay.remove(); };
+  document.body.append(overlay);
+  overlay.focus();
+  return overlay;
+}
+
+let _emojis = null;
+async function getEmojis() {
+  if (!_emojis) _emojis = (await apiFetch(`/api/server/${GUILD_ID}/emojis`)).emojis;
+  return _emojis;
+}
+
+// Emojis unicode comunes con palabras clave en español para el buscador.
+// Lista curada a propósito (un índice completo de unicode pesa cientos de KB).
+const EMOJI_LIST = [
+  ['😀', 'sonrisa feliz'], ['😂', 'risa llorar'], ['🤣', 'carcajada risa'], ['😊', 'sonrisa tierna'],
+  ['😍', 'enamorado corazones'], ['🥰', 'amor carino'], ['😎', 'lentes cool'], ['🤔', 'pensando duda'],
+  ['😅', 'risa nervios'], ['😭', 'llorar triste'], ['😢', 'lagrima triste'], ['😡', 'enojado furia'],
+  ['🥺', 'ojitos porfa'], ['😴', 'dormir sueno'], ['🤯', 'explota mente'], ['😱', 'grito susto'],
+  ['🙄', 'ojos vueltos'], ['😉', 'guino'], ['🤗', 'abrazo'], ['🤫', 'silencio secreto'],
+  ['👍', 'pulgar arriba ok'], ['👎', 'pulgar abajo'], ['👏', 'aplausos'], ['🙌', 'manos celebrar'],
+  ['🙏', 'gracias rezar porfa'], ['💪', 'fuerza musculo'], ['🤝', 'apreton trato'], ['👋', 'hola chau saludo'],
+  ['✌️', 'paz victoria'], ['🤞', 'suerte dedos'], ['👀', 'ojos mirando'], ['🧠', 'cerebro'],
+  ['❤️', 'corazon rojo amor'], ['🧡', 'corazon naranja'], ['💛', 'corazon amarillo'], ['💚', 'corazon verde'],
+  ['💙', 'corazon azul'], ['💜', 'corazon violeta'], ['🖤', 'corazon negro'], ['💔', 'corazon roto'],
+  ['✨', 'brillos destellos'], ['⭐', 'estrella'], ['🌟', 'estrella brillante'], ['🔥', 'fuego'],
+  ['💥', 'explosion boom'], ['🎉', 'fiesta confeti festejo'], ['🎊', 'festejo bola confeti'], ['🎈', 'globo'],
+  ['🎁', 'regalo'], ['🏆', 'trofeo campeon'], ['🥇', 'medalla oro primero'], ['🎮', 'juego gamer control'],
+  ['🎵', 'musica nota'], ['🎶', 'musica notas'], ['🎤', 'microfono cantar'], ['🎬', 'cine claqueta'],
+  ['📢', 'anuncio megafono'], ['📣', 'megafono aviso'], ['🔔', 'campana notificacion'], ['🔕', 'campana silencio'],
+  ['📌', 'pin fijado'], ['📍', 'ubicacion pin'], ['📎', 'clip adjunto'], ['🔗', 'link enlace'],
+  ['📅', 'calendario fecha'], ['⏰', 'reloj alarma'], ['⏳', 'reloj arena espera'], ['🕐', 'reloj hora'],
+  ['✅', 'check listo verde'], ['❌', 'cruz error rojo'], ['⚠️', 'advertencia cuidado'], ['🚫', 'prohibido'],
+  ['❓', 'pregunta duda'], ['❗', 'exclamacion importante'], ['💡', 'idea foco'], ['🔒', 'candado bloqueado'],
+  ['🔓', 'candado abierto'], ['🔑', 'llave'], ['⚙️', 'engranaje config'], ['🛠️', 'herramientas'],
+  ['📝', 'nota escribir'], ['📖', 'libro leer'], ['📊', 'grafico estadisticas'], ['💰', 'dinero bolsa'],
+  ['💎', 'diamante gema'], ['🚀', 'cohete lanzamiento'], ['🌈', 'arcoiris'], ['☀️', 'sol'],
+  ['🌙', 'luna noche'], ['⛈️', 'tormenta lluvia'], ['❄️', 'nieve copo'], ['🌊', 'ola mar'],
+  ['🍕', 'pizza'], ['🍔', 'hamburguesa'], ['🌮', 'taco'], ['🍦', 'helado'],
+  ['☕', 'cafe'], ['🍺', 'cerveza'], ['🐱', 'gato'], ['🐶', 'perro'],
+  ['🦊', 'zorro'], ['🐸', 'rana'], ['🐢', 'tortuga'], ['🦆', 'pato'],
+];
+
+// Inserta texto en la posición del cursor del input/textarea activo y dispara
+// 'input' para que los handlers existentes actualicen estado + preview.
+function insertAtCursor(input, text) {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  input.value = input.value.slice(0, start) + text + input.value.slice(end);
+  const pos = start + text.length;
+  input.selectionStart = input.selectionEnd = pos;
+  input.focus();
+  input.dispatchEvent(new Event('input'));
+}
+
+// --- Popover unificado de inserción (menciones / fecha / emoji) ---
+
+let _insPop = null;
+function closeInsertPopover() {
+  if (_insPop) { _insPop.remove(); _insPop = null; }
+  document.removeEventListener('mousedown', _insPopOutside);
+}
+function _insPopOutside(e) {
+  if (_insPop && !_insPop.contains(e.target)) closeInsertPopover();
+}
+
+const INS_TAB_LABELS = { menciones: 'Menciones', fecha: 'Fecha', emoji: 'Emoji' };
+
+function openInsertPopover(anchor, input, tabs, initialTab) {
+  closeInsertPopover();
+  const pop = el('div', { class: 'ins-pop' });
+  const body = el('div', { class: 'ins-pop-body' });
+  let active = initialTab && tabs.includes(initialTab) ? initialTab : tabs[0];
+  const tabBar = el('div', { class: 'ins-pop-tabs' });
+
+  function renderTabs() {
+    tabBar.innerHTML = '';
+    for (const t of tabs) {
+      tabBar.append(el('div', {
+        class: 'ins-pop-tab' + (t === active ? ' active' : ''),
+        onclick: () => { active = t; renderTabs(); renderBody(); },
+      }, INS_TAB_LABELS[t]));
+    }
+  }
+
+  function insert(text, ev) {
+    insertAtCursor(input, text);
+    // Shift+click mantiene el popover abierto para insertar varios seguidos.
+    if (!ev || !ev.shiftKey) closeInsertPopover();
+  }
+
+  async function renderBody() {
+    body.innerHTML = '';
+    if (active === 'menciones') {
+      body.append(spinner());
+      let roles, channels;
+      try { [roles, channels] = await Promise.all([getRoles(), getChannels()]); }
+      catch (e) { body.innerHTML = ''; body.append(el('p', { class: 'error' }, e.message)); return; }
+      body.innerHTML = '';
+      const search = el('input', { type: 'text', placeholder: 'Buscar rol o canal…' });
+      const list = el('div', { class: 'ins-pop-list' });
+      function renderList() {
+        const q = search.value.trim().toLowerCase();
+        list.innerHTML = '';
+        for (const r of roles) {
+          if (q && !r.name.toLowerCase().includes(q)) continue;
+          list.append(el('div', { class: 'ins-pop-item', onclick: (ev) => insert(`<@&${r.id}>`, ev) },
+            el('span', { class: 'ins-dot', style: 'background:' + (r.color !== '#000000' ? r.color : 'var(--text-muted)') }),
+            '@' + r.name));
+        }
+        for (const c of channels) {
+          if (q && !c.name.toLowerCase().includes(q)) continue;
+          list.append(el('div', { class: 'ins-pop-item', onclick: (ev) => insert(`<#${c.id}>`, ev) }, '#' + c.name));
+        }
+        if (!list.children.length) list.append(el('p', { class: 'dim', style: 'padding:8px' }, 'Sin resultados'));
+      }
+      search.oninput = renderList;
+      body.append(search, list);
+      renderList();
+      search.focus();
+    } else if (active === 'fecha') {
+      // datetime-local nativo, redondeado al minuto actual.
+      const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      const dt = el('input', { type: 'datetime-local', value: now });
+      const list = el('div', { class: 'ins-pop-list' });
+      const STYLES = [
+        ['t', 'Hora corta'], ['T', 'Hora con segundos'], ['d', 'Fecha corta'],
+        ['D', 'Fecha larga'], ['f', 'Fecha y hora'], ['F', 'Fecha y hora completa'],
+        ['R', 'Relativo (hace / en…)'],
+      ];
+      function tsPreview(date, style) {
+        if (style === 'R') {
+          const s = Math.round((date - Date.now()) / 1000);
+          const rtf = new Intl.RelativeTimeFormat('es');
+          const abs = Math.abs(s);
+          if (abs < 60) return rtf.format(s, 'second');
+          if (abs < 3600) return rtf.format(Math.round(s / 60), 'minute');
+          if (abs < 86400) return rtf.format(Math.round(s / 3600), 'hour');
+          return rtf.format(Math.round(s / 86400), 'day');
+        }
+        const opts = {
+          t: { timeStyle: 'short' }, T: { timeStyle: 'medium' },
+          d: { dateStyle: 'short' }, D: { dateStyle: 'long' },
+          f: { dateStyle: 'long', timeStyle: 'short' }, F: { dateStyle: 'full', timeStyle: 'short' },
+        }[style];
+        return new Intl.DateTimeFormat('es', opts).format(date);
+      }
+      function renderStyles() {
+        const date = dt.value ? new Date(dt.value) : new Date();
+        list.innerHTML = '';
+        for (const [code, label] of STYLES) {
+          list.append(el('div', {
+            class: 'ins-pop-item',
+            onclick: (ev) => insert(`<t:${Math.floor(date.getTime() / 1000)}:${code}>`, ev),
+          },
+            el('span', { class: 'ins-item-label' }, label),
+            el('span', { class: 'dim' }, tsPreview(date, code))));
+        }
+      }
+      dt.onchange = renderStyles;
+      body.append(el('div', { class: 'field' }, dt), list);
+      renderStyles();
+    } else {
+      // emoji
+      const search = el('input', { type: 'text', placeholder: 'Buscar emoji…' });
+      const grid = el('div', { class: 'ins-emoji-grid' });
+      let custom = [];
+      try { custom = await getEmojis(); } catch (e) { /* sin custom, unicode igual sirve */ }
+      function renderGrid() {
+        const q = search.value.trim().toLowerCase();
+        grid.innerHTML = '';
+        for (const em of custom) {
+          if (q && !em.name.toLowerCase().includes(q)) continue;
+          const code = `<${em.animated ? 'a' : ''}:${em.name}:${em.id}>`;
+          grid.append(el('button', {
+            class: 'ins-emoji', title: ':' + em.name + ':',
+            onclick: (ev) => insert(code, ev),
+          }, embedImg({ src: em.url, alt: em.name, class: 'ins-emoji-img' })));
+        }
+        for (const [ch, keywords] of EMOJI_LIST) {
+          if (q && !keywords.includes(q)) continue;
+          grid.append(el('button', { class: 'ins-emoji', onclick: (ev) => insert(ch, ev) }, ch));
+        }
+        if (!grid.children.length) grid.append(el('p', { class: 'dim', style: 'padding:8px' }, 'Sin resultados'));
+      }
+      search.oninput = renderGrid;
+      body.append(search, grid);
+      renderGrid();
+      search.focus();
+    }
+  }
+
+  pop.append(tabBar, body);
+  pop.onkeydown = (e) => { if (e.key === 'Escape') { closeInsertPopover(); input.focus(); } };
+  document.body.append(pop);
+  // Posicionar bajo el ancla, sin salirse del viewport.
+  const rect = anchor.getBoundingClientRect();
+  pop.style.top = Math.min(rect.bottom + 4, window.innerHeight - 340) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 340) + 'px';
+  _insPop = pop;
+  setTimeout(() => document.addEventListener('mousedown', _insPopOutside), 0);
+  renderTabs();
+  renderBody();
+}
+
+// Envuelve un input/textarea con el botón de inserción asistida + atajos
+// Ctrl/Cmd+M (menciones), Ctrl/Cmd+P (fecha), Ctrl/Cmd+E (emoji).
+function insertWrap(input, tabs) {
+  const btn = el('button', {
+    type: 'button', class: 'ins-btn', title: 'Insertar mención, fecha o emoji',
+    onclick: () => openInsertPopover(btn, input, tabs),
+  });
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
+  const SHORTCUTS = { m: 'menciones', p: 'fecha', e: 'emoji' };
+  input.addEventListener('keydown', (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
+    const tab = SHORTCUTS[ev.key.toLowerCase()];
+    // preventDefault SOLO para las combinaciones propias (no pisar otras del navegador).
+    if (tab && tabs.includes(tab)) { ev.preventDefault(); openInsertPopover(btn, input, tabs, tab); }
+  });
+  return el('div', { class: 'ins-wrap' }, input, btn);
+}
+
+// --- Subida directa de imágenes (5.2) ---
+
+// Archivos subidos en esta sesión de página, para el desplegable "reusar".
+let _uploadedImages = [];
+
+async function uploadImageBlob(blob, name) {
+  let r;
+  try {
+    r = await fetch(`/api/server/${GUILD_ID}/embeds/upload`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    });
+  } catch (e) {
+    throw new Error('No se pudo conectar con el servidor.');
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || humanError(r.status));
+  if (!_uploadedImages.some(u => u.url === data.url)) {
+    _uploadedImages.push({ name: name || 'imagen', url: data.url });
+  }
+  return data.url;
+}
+
+const _PASTE_HINT = /mac/i.test(navigator.platform || '') ? '⌘V' : 'Ctrl+V';
+
+// Widget combinado de imagen: URL manual + subir archivo + pegar del
+// portapapeles + reusar ya subida. Guarda la URL final en obj[key].
+function imageField(obj, key, onChange, opts = {}) {
+  const wrap = el('div', { class: 'img-field' });
+
+  function set(url) { obj[key] = url; onChange(); render(); }
+
+  async function handleUpload(file) {
+    const status = el('p', { class: 'dim', style: 'margin:4px 0' }, 'Subiendo…');
+    wrap.append(status);
+    try {
+      const url = await uploadImageBlob(file, file.name);
+      set(url);
+      toast('Imagen subida', 'ok');
+    } catch (e) {
+      status.remove();
+      toast(e.message, e.status === 429 ? 'warn' : 'err');
+    }
+  }
+
+  function render() {
+    wrap.innerHTML = '';
+    const val = (obj[key] || '').trim();
+    if (val) {
+      const known = _uploadedImages.find(u => u.url === val);
+      wrap.append(el('div', { class: 'img-chip' },
+        embedImg({ src: val, class: 'img-chip-thumb', alt: '' }),
+        el('span', { class: 'img-chip-name', title: val },
+          known ? known.name : (val.length > 42 ? val.slice(0, 42) + '…' : val)),
+        el('button', { class: 'btn btn-danger btn-sm', onclick: () => set('') }, '✗')));
+      return;
+    }
+
+    const url = el('input', { type: 'url', placeholder: 'https://… o sube/pega una imagen' });
+    const gifNote = el('div', { class: 'embed-gif-note' });
+    url.oninput = () => {
+      if (!opts.gif) return;
+      const d = detectGif(url.value);
+      gifNote.className = 'embed-gif-note' + (d ? (d.warn ? ' warn' : ' ok') : '');
+      gifNote.textContent = d ? d.note : '';
+    };
+    url.onchange = () => {
+      let v = url.value.trim();
+      if (opts.gif) {
+        const d = detectGif(v);
+        if (d && !d.warn) v = d.url;
+      }
+      if (v) set(v);
+    };
+
+    const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: 'display:none' });
+    fileInput.onchange = () => { if (fileInput.files[0]) handleUpload(fileInput.files[0]); };
+    const uploadBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: () => fileInput.click() }, 'Subir archivo');
+    const pasteBtn = el('button', {
+      type: 'button', class: 'btn btn-secondary btn-sm', title: 'También puedes pegar con ' + _PASTE_HINT + ' con el campo enfocado',
+      onclick: async () => {
+        // clipboard.read() solo anda en Chromium con permiso; el paste con
+        // teclado (listener de abajo) es el camino universal.
+        try {
+          const items = await navigator.clipboard.read();
+          for (const item of items) {
+            const type = item.types.find(t => t.startsWith('image/'));
+            if (type) { handleUpload(await item.getType(type)); return; }
+          }
+          toast('No hay imagen en el portapapeles', 'warn');
+        } catch (e) {
+          toast('Usa ' + _PASTE_HINT + ' con el campo de URL enfocado', 'warn');
+        }
+      },
+    }, 'Pegar (' + _PASTE_HINT + ')');
+    url.addEventListener('paste', (ev) => {
+      const file = [...(ev.clipboardData?.files || [])].find(f => f.type.startsWith('image/'));
+      if (file) { ev.preventDefault(); handleUpload(file); }
+    });
+
+    const row = el('div', { class: 'img-field-row' }, url, uploadBtn, pasteBtn, fileInput);
+    if (_uploadedImages.length) {
+      const reuse = el('select', {}, el('option', { value: '' }, 'Reusar archivo ya subido…'));
+      for (const u of _uploadedImages) reuse.append(el('option', { value: u.url }, u.name));
+      reuse.onchange = () => { if (reuse.value) set(reuse.value); };
+      row.append(reuse);
+    }
+    wrap.append(row, gifNote);
+  }
+
+  render();
+  return wrap;
+}
+
+// --- Historial local (5.4) ---
+
+const HIST_MAX = 20;
+let _histTimer = null;
+
+function histKey() { return `purgito_hist_${GUILD_ID}_${_embedMode}`; }
+
+function readHistory() {
+  try { return JSON.parse(localStorage.getItem(histKey()) || '[]'); }
+  catch (e) { return []; }
+}
+
+function saveHistorySnapshot() {
+  const doc = _embedMode === 'layout' ? _layoutDoc : _embedDoc;
+  if (!doc) return;
+  const list = readHistory();
+  const snap = JSON.stringify(doc);
+  if (list.length && JSON.stringify(list[0].doc) === snap) return; // sin cambios
+  list.unshift({ ts: Date.now(), doc: JSON.parse(snap) });
+  try { localStorage.setItem(histKey(), JSON.stringify(list.slice(0, HIST_MAX))); }
+  catch (e) { /* quota llena: el historial es red de seguridad, no crítico */ }
+}
+
+function scheduleHistorySnapshot() {
+  clearTimeout(_histTimer);
+  _histTimer = setTimeout(saveHistorySnapshot, 3000);
+}
+
+function historySummary(doc) {
+  if (doc.blocks) return `Layout con ${doc.blocks.length} bloque(s)`;
+  const n = doc.embeds.map(embedDict).filter(d => Object.keys(d).length).length;
+  return `${n} embed(s)`;
+}
+
+function openHistoryModal() {
+  saveHistorySnapshot(); // el estado actual también entra, así restaurar es reversible
+  const list = readHistory();
+  const body = el('div', { class: 'hist-list' });
+  if (!list.length) body.append(emptyState('Todavía no hay versiones guardadas.'));
+  list.forEach((entry, i) => {
+    const previewBox = el('div', { style: 'display:none' });
+    let previewLoaded = false;
+    const row = el('div', { class: 'hist-entry' },
+      el('div', { class: 'hist-entry-head' },
+        el('span', {}, new Date(entry.ts).toLocaleString()),
+        el('span', { class: 'dim' }, historySummary(entry.doc)),
+        el('button', {
+          class: 'btn btn-secondary btn-sm',
+          onclick: () => {
+            if (!previewLoaded) {
+              previewLoaded = true;
+              previewBox.append(entry.doc.blocks
+                ? renderLayoutPreview(entry.doc.blocks.map(blockToApi))
+                : renderEmbedsPreview(entry.doc.embeds.map(embedDict)));
+            }
+            previewBox.style.display = previewBox.style.display === 'none' ? '' : 'none';
+          },
+        }, 'Ver'),
+        el('button', {
+          class: 'btn btn-primary btn-sm',
+          onclick: () => {
+            if (entry.doc.blocks) _layoutDoc = entry.doc; else _embedDoc = entry.doc;
+            // Deshacer lineal: restaurar descarta las versiones posteriores.
+            try { localStorage.setItem(histKey(), JSON.stringify(list.slice(i))); } catch (e) {}
+            document.querySelector('.modal-overlay')?.remove();
+            loadEmbeds();
+          },
+        }, 'Restaurar')),
+      previewBox);
+    body.append(row);
+  });
+  panelModal('Historial local', body);
+}
+
+// --- Modo JSON (5.5) ---
+
+function openJsonModal() {
+  const isLayout = _embedMode === 'layout';
+  const doc = isLayout ? _layoutDoc : _embedDoc;
+  const payload = isLayout
+    ? { blocks: doc.blocks.map(blockToApi) }
+    : { embeds: docDicts(doc) };
+  const ta = el('textarea', { class: 'json-editor', spellcheck: 'false' });
+  ta.value = JSON.stringify(payload, null, 2);
+  ta.wrap = 'off';
+  const errBox = el('p', { class: 'error', style: 'min-height:1.2em;margin:6px 0' }, '');
+  const applyBtn = el('button', { class: 'btn btn-primary', disabled: true }, 'Aplicar');
+  let parsed = payload;
+  let validateTimer = null;
+
+  async function validate() {
+    try { parsed = JSON.parse(ta.value); }
+    catch (e) { errBox.textContent = 'JSON inválido: ' + e.message; applyBtn.disabled = true; return; }
+    const body = isLayout
+      ? { content_mode: 'layout_v2', layout: parsed }
+      : { content_mode: 'classic_embed', embeds: parsed.embeds };
+    try {
+      const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/validate`, { method: 'POST', body });
+      errBox.textContent = resp.ok ? '' : resp.error;
+      applyBtn.disabled = !resp.ok;
+    } catch (e) { errBox.textContent = e.message; applyBtn.disabled = true; }
+  }
+  ta.oninput = () => { clearTimeout(validateTimer); validateTimer = setTimeout(validate, 400); };
+
+  const wrapChk = el('input', { type: 'checkbox' });
+  wrapChk.onchange = () => { ta.wrap = wrapChk.checked ? 'soft' : 'off'; };
+
+  applyBtn.onclick = () => {
+    if (isLayout) doc.blocks = (parsed.blocks || []).map(apiToBlock);
+    else { doc.embeds = (parsed.embeds && parsed.embeds.length ? parsed.embeds : [{}]).map(embedToState); doc.active = 0; }
+    document.querySelector('.modal-overlay')?.remove();
+    loadEmbeds();
+  };
+
+  panelModal('Editar como JSON', el('div', {},
+    ta, errBox,
+    el('div', { class: 'add-row' },
+      applyBtn,
+      el('button', { class: 'btn btn-secondary', onclick: () => document.querySelector('.modal-overlay')?.remove() }, 'Cancelar'),
+      el('label', { class: 'toggle' }, wrapChk, 'Ajuste de línea'))));
+  validate();
+}
+
+// --- Opciones de envío finas (5.6) ---
+
+function blankSendOpts() { return { silent: false, restrict: false, roleIds: [] }; }
+
+function sendOptsToApi(o) {
+  if (!o || (!o.silent && !o.restrict)) return undefined; // defaults: no mandar nada
+  return { silent: o.silent, restrict_mentions: o.restrict, allowed_role_ids: o.roleIds };
+}
+
+function sendOptsFromApi(so) {
+  const o = blankSendOpts();
+  if (so) {
+    o.silent = !!so.silent;
+    o.restrict = !!so.restrict_mentions;
+    o.roleIds = (so.allowed_role_ids || []).map(String);
+  }
+  return o;
+}
+
+// Panel colapsable (details/summary nativo) con las opciones de envío.
+function sendOptionsPanel(o, roles) {
+  const silent = el('input', { type: 'checkbox', checked: o.silent });
+  silent.onchange = () => { o.silent = silent.checked; };
+  const restrict = el('input', { type: 'checkbox', checked: o.restrict });
+  const roleSel = el('select', { multiple: 'multiple', size: '5', class: 'send-opts-roles' });
+  for (const r of roles) {
+    const opt = el('option', { value: r.id }, '@' + r.name);
+    opt.selected = o.roleIds.includes(r.id);
+    roleSel.append(opt);
+  }
+  roleSel.onchange = () => { o.roleIds = [...roleSel.selectedOptions].map(x => x.value); };
+  const roleBlock = el('div', { class: 'field', style: o.restrict ? '' : 'display:none' },
+    el('label', {}, 'Roles que SÍ pueden ser pingueados (vacío = nadie; Ctrl+click para varios)'),
+    roleSel);
+  restrict.onchange = () => { o.restrict = restrict.checked; roleBlock.style.display = o.restrict ? '' : 'none'; };
+  const details = el('details', { class: 'send-opts' },
+    el('summary', {}, 'Opciones de envío'),
+    el('div', { class: 'field' }, el('label', { class: 'toggle' }, silent, 'Envío silencioso (sin notificación push)')),
+    el('div', { class: 'field' }, el('label', { class: 'toggle' }, restrict, 'No mencionar a nadie salvo lo explícito')),
+    roleBlock);
+  if (o.silent || o.restrict) details.open = true;
+  return details;
+}
+
 // Preview puro HTML/CSS de un embed de Discord; sin llamada al backend.
 function renderEmbedPreview(e) {
   if (!Object.keys(e).length) return emptyState('El preview aparece aquí a medida que completas el formulario.');
@@ -661,6 +1182,9 @@ function renderEmbedsPreview(dicts) {
 }
 
 async function loadEmbeds() {
+  closeInsertPopover();
+  // Cambiar de tab/bloque/modo también persiste una versión en el historial.
+  saveHistorySnapshot();
   const box = content();
   const tabs = el('div', { class: 'embed-tabs' },
     el('div', { class: 'embed-tab' + (_embedTab === 'editor' ? ' active' : ''), onclick: () => { _embedTab = 'editor'; loadEmbeds(); } }, 'Crear / Enviar'),
@@ -696,18 +1220,21 @@ async function renderEmbedEditor(box) {
   const inner = el('div', {});
   box.append(inner);
   if (_embedMode === 'layout') renderLayoutEditor(inner, channels, roles);
-  else renderClassicEditor(inner, channels);
+  else renderClassicEditor(inner, channels, roles);
 }
 
-function renderClassicEditor(box, channels) {
+function renderClassicEditor(box, channels, roles) {
   if (!_embedDoc) _embedDoc = blankDoc();
   const doc = _embedDoc;
+  // Docs restaurados de un historial anterior a la Fase 5 no traen sendOpts.
+  if (!doc.sendOpts) doc.sendOpts = blankSendOpts();
   const s = doc.embeds[doc.active];  // embed activo
 
   const previewBox = el('div', {});
   function updatePreview() {
     previewBox.innerHTML = '';
     previewBox.append(renderEmbedsPreview(doc.embeds.map(embedDict)));
+    scheduleHistorySnapshot();
   }
 
   function bound(tag, key, attrs) {
@@ -723,27 +1250,6 @@ function renderClassicEditor(box, channels) {
 
   function fieldBlock(label, node) {
     return el('div', { class: 'field' }, el('label', {}, label), node);
-  }
-
-  // Input de URL de imagen/thumbnail con aviso de GIF (Tenor/Giphy) debajo.
-  function imageBlock(label, key) {
-    const input = bound('input', key, { type: 'url', placeholder: 'https://…' });
-    const notice = el('div', { class: 'embed-gif-note' });
-    function refresh() {
-      const d = detectGif(input.value);
-      notice.className = 'embed-gif-note' + (d ? (d.warn ? ' warn' : ' ok') : '');
-      notice.textContent = d ? d.note : '';
-    }
-    input.addEventListener('input', refresh);
-    // Al salir del campo, si Giphy tiene una URL directa mejor, la aplicamos.
-    input.addEventListener('change', () => {
-      const d = detectGif(input.value);
-      if (d && !d.warn && d.url !== input.value.trim()) {
-        input.value = d.url; s[key] = d.url; refresh(); updatePreview();
-      }
-    });
-    refresh();
-    return el('div', { class: 'field' }, el('label', {}, label), input, notice);
   }
 
   // --- fields dinámicos ---
@@ -849,8 +1355,9 @@ function renderClassicEditor(box, channels) {
       if (err) { toast(err, 'err'); return; }
       if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
       try {
+        const sendOpts = sendOptsToApi(doc.sendOpts);
         if (modeSched.checked) {
-          const body = { channel_id: chSel.value, embeds: dicts, mode: schedType.value };
+          const body = { channel_id: chSel.value, embeds: dicts, mode: schedType.value, send_options: sendOpts };
           if (schedType.value === 'interval') {
             body.interval_minutes = parseInt(intervalInput.value, 10);
           } else {
@@ -860,7 +1367,7 @@ function renderClassicEditor(box, channels) {
           await apiFetch(`/api/server/${GUILD_ID}/embeds/schedule`, { method: 'POST', body });
           toast('Embed programado', 'ok');
         } else {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embeds: dicts } });
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embeds: dicts, send_options: sendOpts } });
           toast(dicts.length > 1 ? `${dicts.length} embeds enviados` : 'Embed enviado', 'ok');
         }
       } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
@@ -876,11 +1383,12 @@ function renderClassicEditor(box, channels) {
       const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
       if (!name) return;
       try {
+        const body = { name, embeds: dicts, send_options: sendOptsToApi(doc.sendOpts) };
         if (doc.templateId) {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body: { name, embeds: dicts } });
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body });
           toast('Plantilla actualizada', 'ok');
         } else {
-          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, embeds: dicts } });
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body });
           doc.templateId = resp.id;
           toast('Plantilla guardada', 'ok');
         }
@@ -894,27 +1402,35 @@ function renderClassicEditor(box, channels) {
     onclick: () => { _embedDoc = blankDoc(); loadEmbeds(); },
   }, 'Limpiar');
 
+  const histBtn = el('button', { class: 'btn btn-secondary', onclick: openHistoryModal }, 'Historial');
+  const jsonBtn = el('button', { class: 'btn btn-secondary', onclick: openJsonModal }, 'Ver/editar JSON');
+
   const form = el('div', { class: 'embed-form' },
     embedBar,
     fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
-    fieldBlock('Descripción', bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) })),
+    fieldBlock('Descripción', insertWrap(
+      bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) }),
+      ['menciones', 'fecha', 'emoji'])),
     fieldBlock('Color', bound('input', 'color', { type: 'color' })),
     el('div', { class: 'embed-two' },
-      fieldBlock('Autor', bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) })),
-      fieldBlock('URL del ícono del autor', bound('input', 'authorIcon', { type: 'url', placeholder: 'https://…' }))),
+      fieldBlock('Autor', insertWrap(
+        bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) }), ['emoji'])),
+      fieldBlock('Ícono del autor', imageField(s, 'authorIcon', updatePreview))),
     el('div', { class: 'embed-two' },
-      fieldBlock('Footer', bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) })),
-      fieldBlock('URL del ícono del footer', bound('input', 'footerIcon', { type: 'url', placeholder: 'https://…' }))),
+      fieldBlock('Footer', insertWrap(
+        bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) }), ['emoji'])),
+      fieldBlock('Ícono del footer', imageField(s, 'footerIcon', updatePreview))),
     el('div', { class: 'embed-two' },
-      imageBlock('Thumbnail (URL)', 'thumbnail'),
-      imageBlock('Imagen grande (URL)', 'image')),
+      fieldBlock('Thumbnail', imageField(s, 'thumbnail', updatePreview, { gif: true })),
+      fieldBlock('Imagen grande', imageField(s, 'image', updatePreview, { gif: true }))),
     el('div', { class: 'field' }, el('label', {}, 'Fields'), fieldsBox, addFieldBtn),
     el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
     el('div', { class: 'field' },
       el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
       el('label', { class: 'toggle' }, modeSched, 'Programar'),
       schedControls),
-    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn));
+    sendOptionsPanel(doc.sendOpts, roles),
+    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn, histBtn, jsonBtn));
 
   box.append(el('div', { class: 'embed-layout' },
     form,
@@ -933,7 +1449,8 @@ const BLOCK_LABELS = {
 
 function blankLayoutDoc() {
   return { blocks: [], channelId: '', sendMode: 'now', schedType: 'interval',
-           interval: '60', time: '09:00', templateId: null, templateName: '' };
+           interval: '60', time: '09:00', templateId: null, templateName: '',
+           sendOpts: blankSendOpts() };
 }
 
 function newBlock(type) {
@@ -993,42 +1510,151 @@ function apiToBlock(b) {
   return { type: 'text', content: b.content || '' };
 }
 
-function docFromLayout(layout, templateId, templateName) {
+function docFromLayout(layout, templateId, templateName, sendOptions) {
   const doc = blankLayoutDoc();
   doc.blocks = (layout.blocks || []).map(apiToBlock);
   doc.templateId = templateId || null;
   doc.templateName = templateName || '';
+  doc.sendOpts = sendOptsFromApi(sendOptions || layout.send_options);
   return doc;
 }
+
+// --- Outline de bloques (5.3): resumen, advertencias y conteo de componentes ---
+
+function firstWords(text, max = 40) {
+  const t = (text || '').trim().replace(/\s+/g, ' ');
+  return t.length > max ? t.slice(0, max) + '…' : t;
+}
+
+// Adelanto corto del contenido de un bloque para su fila colapsada.
+function blockSummary(b) {
+  if (b.type === 'text') return firstWords(b.content);
+  if (b.type === 'section') return firstWords((b.texts || []).find(t => t.trim()) || '');
+  if (b.type === 'media_gallery') {
+    const n = b.items.filter(it => it.url.trim()).length;
+    return n ? `${n} imagen(es)` : '';
+  }
+  if (b.type === 'action_row') return b.buttons.map(bt => bt.label.trim()).filter(Boolean).join(', ');
+  if (b.type === 'separator') return b.visible ? 'línea visible' : 'solo espacio';
+  if (b.type === 'container') return `${b.children.length} bloque(s)`;
+  return '';
+}
+
+function btnWarn(bt) {
+  if (!bt.label.trim()) return 'Botón sin texto';
+  if (bt.style === 'link' && !/^https?:\/\//.test((bt.url || '').trim())) return 'Botón sin URL válida';
+  if (bt.style === 'role' && !bt.role_id) return 'Botón sin rol elegido';
+  return null;
+}
+
+// Problema de validación visible en la fila colapsada, sin expandir el bloque.
+function blockWarning(b) {
+  if (b.type === 'text' && !b.content.trim()) return 'Texto vacío';
+  if (b.type === 'section') {
+    if (!(b.texts || []).some(t => t.trim())) return 'Sección sin texto';
+    if (b.accessory.type === 'thumbnail' && !b.accessory.url.trim()) return 'Miniatura sin imagen';
+    if (b.accessory.type === 'button') return btnWarn(b.accessory);
+  }
+  if (b.type === 'media_gallery' && !b.items.some(it => it.url.trim())) return 'Galería sin imágenes';
+  if (b.type === 'action_row') {
+    if (!b.buttons.length) return 'Fila sin botones';
+    for (const bt of b.buttons) { const w = btnWarn(bt); if (w) return w; }
+  }
+  if (b.type === 'container') {
+    if (!b.children.length) return 'Container vacío';
+    for (const c of b.children) { const w = blockWarning(c); if (w) return w; }
+  }
+  return null;
+}
+
+// Espejo del conteo de validate_layout_v2_payload (máx 40 componentes).
+function componentCount(blocks) {
+  let n = 0;
+  for (const b of blocks) {
+    n++;
+    if (b.type === 'container') n += componentCount(b.children);
+    else if (b.type === 'section') n += b.texts.length + 1; // textos + accesorio
+    else if (b.type === 'action_row') n += b.buttons.length;
+  }
+  return n;
+}
+
+// Al duplicar, limpiar cualquier identificador único (custom_id de botones)
+// para que la copia no colisione con el original. El estado del editor no
+// suele llevarlos (se mintean en el backend), pero un doc restaurado de
+// historial o pegado por JSON podría traerlos.
+function stripBlockIds(b) {
+  delete b.custom_id;
+  (b.buttons || []).forEach(bt => delete bt.custom_id);
+  if (b.accessory) delete b.accessory.custom_id;
+  (b.children || []).forEach(stripBlockIds);
+}
+
+const LAYOUT_MAX_COMPONENTS = 40;
 
 // Lista editable de bloques (recursiva: un container tiene su propia lista).
 function renderBlocks(listEl, blocks, inContainer, onChange, roles) {
   listEl.innerHTML = '';
-  blocks.forEach((_, i) => listEl.append(renderBlockCard(listEl, blocks, i, inContainer, onChange, roles)));
+  // Numeración correlativa POR TIPO (un Separator entre dos Textos no corre
+  // la numeración de los Textos).
+  const typeCounts = {};
+  blocks.forEach((b, i) => {
+    typeCounts[b.type] = (typeCounts[b.type] || 0) + 1;
+    listEl.append(renderBlockCard(listEl, blocks, i, typeCounts[b.type], inContainer, onChange, roles));
+  });
   const adder = el('div', { class: 'add-row layout-adder' });
+  const atMax = componentCount(_layoutDoc ? _layoutDoc.blocks : blocks) >= LAYOUT_MAX_COMPONENTS;
   const types = [['text', '+ Texto'], ['section', '+ Sección'], ['media_gallery', '+ Galería'],
                  ['separator', '+ Separador'], ['action_row', '+ Botones']];
   if (!inContainer) types.push(['container', '+ Container']);
   for (const [t, label] of types) {
     adder.append(el('button', {
       class: 'btn btn-secondary btn-sm',
+      disabled: atMax || null,
+      title: atMax ? `Límite de ${LAYOUT_MAX_COMPONENTS} componentes por mensaje alcanzado` : null,
       onclick: () => { blocks.push(newBlock(t)); renderBlocks(listEl, blocks, inContainer, onChange, roles); onChange(); },
     }, label));
   }
   listEl.append(adder);
 }
 
-function renderBlockCard(listEl, blocks, i, inContainer, onChange, roles) {
+function renderBlockCard(listEl, blocks, i, typeNum, inContainer, onChange, roles) {
   const b = blocks[i];
   function rerender() { renderBlocks(listEl, blocks, inContainer, onChange, roles); onChange(); }
+  const warn = blockWarning(b);
+  const summary = blockSummary(b);
+  const body = el('div', { class: 'layout-block-body' }, renderBlockForm(b, onChange, roles));
+  if (b._collapsed) body.style.display = 'none';
+  const toggle = el('button', {
+    class: 'btn btn-secondary btn-sm',
+    title: b._collapsed ? 'Expandir' : 'Colapsar',
+    onclick: () => {
+      // _collapsed vive solo en el estado del editor (blockToApi nunca lo copia).
+      b._collapsed = !b._collapsed;
+      rerender();
+    },
+  }, b._collapsed ? '▸' : '▾');
   const head = el('div', { class: 'layout-block-head' },
-    el('span', { class: 'layout-block-type' }, BLOCK_LABELS[b.type]),
+    el('span', { class: 'layout-block-title' },
+      toggle,
+      el('span', { class: 'layout-block-type' }, `${BLOCK_LABELS[b.type]} ${typeNum}`),
+      warn ? el('span', { class: 'layout-warn', title: warn }, '!') : null,
+      summary ? el('span', { class: 'layout-block-summary dim' }, summary) : null),
     el('span', { class: 'layout-block-actions' },
+      el('button', {
+        class: 'btn btn-secondary btn-sm', title: 'Duplicar bloque',
+        disabled: componentCount(_layoutDoc ? _layoutDoc.blocks : blocks) >= LAYOUT_MAX_COMPONENTS || null,
+        onclick: () => {
+          const copy = structuredClone(b);
+          stripBlockIds(copy);
+          blocks.splice(i + 1, 0, copy);
+          rerender();
+        },
+      }, '⧉'),
       el('button', { class: 'btn btn-secondary btn-sm', disabled: i === 0 || null, onclick: () => { [blocks[i - 1], blocks[i]] = [blocks[i], blocks[i - 1]]; rerender(); } }, '↑'),
       el('button', { class: 'btn btn-secondary btn-sm', disabled: i === blocks.length - 1 || null, onclick: () => { [blocks[i + 1], blocks[i]] = [blocks[i], blocks[i + 1]]; rerender(); } }, '↓'),
       el('button', { class: 'btn btn-danger btn-sm', onclick: () => { blocks.splice(i, 1); rerender(); } }, '✗')));
-  return el('div', { class: 'layout-block' }, head,
-    el('div', { class: 'layout-block-body' }, renderBlockForm(b, onChange, roles)));
+  return el('div', { class: 'layout-block' }, head, body);
 }
 
 // Campos de un botón: selector Enlace/Asignar rol + los inputs correspondientes.
@@ -1056,7 +1682,7 @@ function renderBlockForm(b, onChange, roles) {
     const ta = el('textarea', { class: 'autogrow', placeholder: 'Texto (markdown de Discord)' });
     ta.value = b.content;
     ta.oninput = () => { b.content = ta.value; autoGrow(ta); onChange(); };
-    return ta;
+    return insertWrap(ta, ['menciones', 'fecha', 'emoji']);
   }
   if (b.type === 'separator') {
     const vis = el('input', { type: 'checkbox', checked: b.visible });
@@ -1071,11 +1697,11 @@ function renderBlockForm(b, onChange, roles) {
     function renderItems() {
       box.innerHTML = '';
       b.items.forEach((it, idx) => {
-        const url = el('input', { type: 'url', placeholder: 'URL de imagen', value: it.url });
-        url.oninput = () => { it.url = url.value; onChange(); };
         const desc = el('input', { type: 'text', placeholder: 'Descripción (opcional)', value: it.description });
         desc.oninput = () => { it.description = desc.value; onChange(); };
-        box.append(el('div', { class: 'add-row' }, url, desc,
+        box.append(el('div', { class: 'gallery-item-row' },
+          imageField(it, 'url', onChange),
+          desc,
           b.items.length > 1 ? el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.items.splice(idx, 1); renderItems(); onChange(); } }, '✗') : null));
       });
       box.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.items.length >= 10 || null, onclick: () => { b.items.push({ url: '', description: '' }); renderItems(); onChange(); } }, '+ Imagen'));
@@ -1105,7 +1731,7 @@ function renderBlockForm(b, onChange, roles) {
       b.texts.forEach((tx, idx) => {
         const inp = el('input', { type: 'text', placeholder: 'Texto ' + (idx + 1), value: tx });
         inp.oninput = () => { b.texts[idx] = inp.value; onChange(); };
-        textsBox.append(el('div', { class: 'add-row' }, inp,
+        textsBox.append(el('div', { class: 'add-row' }, insertWrap(inp, ['menciones', 'fecha', 'emoji']),
           b.texts.length > 1 ? el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.texts.splice(idx, 1); renderTexts(); onChange(); } }, '✗') : null));
       });
       textsBox.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.texts.length >= 3 || null, onclick: () => { b.texts.push(''); renderTexts(); onChange(); } }, '+ Texto'));
@@ -1117,11 +1743,9 @@ function renderBlockForm(b, onChange, roles) {
     function renderAcc() {
       accBox.innerHTML = '';
       if (b.accessory.type === 'thumbnail') {
-        const url = el('input', { type: 'url', placeholder: 'URL de miniatura', value: b.accessory.url });
-        url.oninput = () => { b.accessory.url = url.value; onChange(); };
         const desc = el('input', { type: 'text', placeholder: 'Descripción (opcional)', value: b.accessory.description });
         desc.oninput = () => { b.accessory.description = desc.value; onChange(); };
-        accBox.append(el('div', { class: 'add-row' }, url, desc));
+        accBox.append(el('div', { class: 'add-row' }, imageField(b.accessory, 'url', onChange), desc));
       } else {
         accBox.append(buttonStyleFields(b.accessory, onChange, roles));
       }
@@ -1189,6 +1813,7 @@ function renderPreviewBlock(b) {
 function renderLayoutEditor(box, channels, roles) {
   if (!_layoutDoc) _layoutDoc = blankLayoutDoc();
   const doc = _layoutDoc;
+  if (!doc.sendOpts) doc.sendOpts = blankSendOpts();
 
   box.append(el('div', { class: 'embed-warn' },
     'Los layouts V2 no pueden combinar con embeds clásicos en el mismo mensaje — es una limitación de Discord, no del panel.'));
@@ -1197,6 +1822,7 @@ function renderLayoutEditor(box, channels, roles) {
   function updatePreview() {
     previewBox.innerHTML = '';
     previewBox.append(renderLayoutPreview(doc.blocks.map(blockToApi)));
+    scheduleHistorySnapshot();
   }
 
   const blocksList = el('div', { class: 'layout-list' });
@@ -1233,14 +1859,15 @@ function renderLayoutEditor(box, channels, roles) {
       if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
       const layout = { blocks: doc.blocks.map(blockToApi) };
       try {
+        const sendOpts = sendOptsToApi(doc.sendOpts);
         if (modeSched.checked) {
-          const body = { channel_id: chSel.value, content_mode: 'layout_v2', layout, mode: schedType.value };
+          const body = { channel_id: chSel.value, content_mode: 'layout_v2', layout, mode: schedType.value, send_options: sendOpts };
           if (schedType.value === 'interval') body.interval_minutes = parseInt(intervalInput.value, 10);
           else { const [h, m] = timeInput.value.split(':'); body.hour = parseInt(h, 10); body.minute = parseInt(m, 10); }
           await apiFetch(`/api/server/${GUILD_ID}/embeds/schedule`, { method: 'POST', body });
           toast('Layout programado', 'ok');
         } else {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, content_mode: 'layout_v2', layout } });
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, content_mode: 'layout_v2', layout, send_options: sendOpts } });
           toast('Layout enviado', 'ok');
         }
       } catch (e) { toast(e.message, e.status === 429 ? 'warn' : 'err'); }
@@ -1255,11 +1882,12 @@ function renderLayoutEditor(box, channels, roles) {
       const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
       if (!name) return;
       try {
+        const body = { name, content_mode: 'layout_v2', layout, send_options: sendOptsToApi(doc.sendOpts) };
         if (doc.templateId) {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body: { name, content_mode: 'layout_v2', layout } });
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body });
           toast('Plantilla actualizada', 'ok');
         } else {
-          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, content_mode: 'layout_v2', layout } });
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body });
           doc.templateId = resp.id;
           toast('Plantilla guardada', 'ok');
         }
@@ -1269,6 +1897,8 @@ function renderLayoutEditor(box, channels, roles) {
   }, 'Guardar como plantilla');
 
   const clearBtn = el('button', { class: 'btn btn-secondary', onclick: () => { _layoutDoc = blankLayoutDoc(); loadEmbeds(); } }, 'Limpiar');
+  const histBtn = el('button', { class: 'btn btn-secondary', onclick: openHistoryModal }, 'Historial');
+  const jsonBtn = el('button', { class: 'btn btn-secondary', onclick: openJsonModal }, 'Ver/editar JSON');
 
   const form = el('div', { class: 'embed-form' },
     el('div', { class: 'field' }, el('label', {}, 'Bloques'), blocksList),
@@ -1277,7 +1907,8 @@ function renderLayoutEditor(box, channels, roles) {
       el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
       el('label', { class: 'toggle' }, modeSched, 'Programar'),
       schedControls),
-    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn));
+    sendOptionsPanel(doc.sendOpts, roles),
+    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn, histBtn, jsonBtn));
 
   box.append(el('div', { class: 'embed-layout' },
     form,
@@ -1331,10 +1962,11 @@ async function renderEmbedTemplates(box) {
       ? el('span', { class: 'badge badge-premium' }, 'LAYOUT')
       : (embeds.length > 1 ? el('span', { class: 'badge' }, embeds.length + ' embeds') : null);
     const snippet = isLayout ? layoutSnippet(t.layout) : templateSnippet(embeds);
-    // Payload que reusa el "Renombrar" (PUT exige revalidar todo el contenido).
+    // Payload que reusa el "Renombrar" (PUT exige revalidar todo el contenido;
+    // send_options viaja de vuelta para no perderse en el re-guardado).
     const renameBody = (name) => isLayout
-      ? { name, content_mode: 'layout_v2', layout: t.layout }
-      : { name, embeds };
+      ? { name, content_mode: 'layout_v2', layout: t.layout, send_options: t.send_options || undefined }
+      : { name, embeds, send_options: t.send_options || undefined };
     list.append(el('li', {},
       el('span', {},
         el('span', { class: 'tpl-dot', style: 'background:' + color }), ' ',
@@ -1345,8 +1977,8 @@ async function renderEmbedTemplates(box) {
       el('button', {
         class: 'btn btn-secondary btn-sm',
         onclick: () => {
-          if (isLayout) { _embedMode = 'layout'; _layoutDoc = docFromLayout(t.layout, t.id, t.name); }
-          else { _embedMode = 'classic'; _embedDoc = docFromEmbeds(embeds, t.id, t.name); }
+          if (isLayout) { _embedMode = 'layout'; _layoutDoc = docFromLayout(t.layout, t.id, t.name, t.send_options); }
+          else { _embedMode = 'classic'; _embedDoc = docFromEmbeds(embeds, t.id, t.name, t.send_options); }
           _embedTab = 'editor'; loadEmbeds();
         },
       }, 'Cargar en el editor'),

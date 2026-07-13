@@ -42,6 +42,7 @@ from config import (
     SESSION_COOKIE_DOMAIN,
     SESSION_SECRET,
     WEB_PORT,
+    env_int,
     get_invite_url,
 )
 from cogs.premium import is_premium_guild, set_premium, unset_premium
@@ -60,6 +61,7 @@ from db import (
     delete_frase_especial,
     delete_gif_url_by_id,
     embed_template_limit,
+    extract_send_options,
     get_chat_settings,
     list_embed_templates,
     list_frases_especiales,
@@ -86,6 +88,7 @@ from layout_v2 import (
     build_layout_view,
     validate_layout_v2_payload,
 )
+from message_options import sanitize_send_options, send_kwargs
 from pages.panel import PANEL_HTML
 from pages.selector import SELECTOR_HTML
 from utils import LRUDict
@@ -1109,19 +1112,28 @@ def _extract_content(data: dict) -> tuple[str, str, str, str | None]:
 
     - 'layout_v2': valida contra validate_layout_v2_payload, guarda el layout.
     - 'classic_embed' (default): valida el array de embeds, guarda la lista.
-    Los dos formatos comparten la columna embed_json; content_mode desambigua."""
+    Los dos formatos comparten la columna embed_json; content_mode desambigua.
+
+    Si el body trae send_options (envío silencioso / restricción de menciones,
+    Fase 5.6), se guardan dentro del mismo JSON: como clave extra del dict del
+    layout, o envolviendo la lista de embeds en {"embeds": [...],
+    "send_options": {...}} — normalize_embeds_json ya conoce ese wrapper."""
     mode = data.get("content_mode") or "classic_embed"
+    options = sanitize_send_options(data.get("send_options"))
     if mode == "layout_v2":
         layout = data.get("layout")
         err = validate_layout_v2_payload(layout)
         if err:
             return "", "", "", err
+        if options:
+            layout["send_options"] = options
         return mode, json.dumps(layout), _layout_preview(layout), None
     embeds, err = _extract_embeds(data)
     if err:
         return "", "", "", err
     preview = (embeds[0].get("title") or "").strip()[:60] or "[embed]"
-    return "classic_embed", json.dumps(embeds), preview, None
+    payload = {"embeds": embeds, "send_options": options} if options else embeds
+    return "classic_embed", json.dumps(payload), preview, None
 
 
 async def _register_role_buttons(bot, guild_id: int, assignments: list[dict]) -> None:
@@ -1187,15 +1199,16 @@ async def _api_embeds_send(request: web.Request, guild_id: int) -> web.Response:
     channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
     if denied is not None:
         return denied
+    extra = send_kwargs(sanitize_send_options(data.get("send_options")))
     try:
         if mode == "layout_v2":
             layout = data["layout"]
             assignments = assign_button_custom_ids(layout)
             await _register_role_buttons(request.app["bot"], guild_id, assignments)
-            await channel.send(view=build_layout_view(layout))
+            await channel.send(view=build_layout_view(layout), **extra)
         else:
             await channel.send(
-                embeds=[discord.Embed.from_dict(e) for e in data["embeds"]]
+                embeds=[discord.Embed.from_dict(e) for e in data["embeds"]], **extra
             )
     except discord.HTTPException as e:
         # Típicamente una URL de imagen/ícono que Discord rechaza.
@@ -1274,6 +1287,8 @@ def _template_row_to_json(t: dict) -> dict:
         "id": t["id"],
         "name": t["name"],
         "content_mode": content_mode,
+        # None si la plantilla no guarda opciones de envío (el caso común).
+        "send_options": extract_send_options(t["embed_json"]),
         "created_at": t["created_at"],
         "updated_at": t["updated_at"],
     }
@@ -1351,6 +1366,101 @@ async def _api_embed_template_delete(request: web.Request, guild_id: int) -> web
         return web.json_response({"error": "template_id inválido"}, status=400)
     deleted = await delete_embed_template(template_id, guild_id)
     return web.json_response({"deleted": deleted})
+
+
+# ---------------- API: emojis, validación en vivo y subida de imágenes ------
+
+
+@guild_api
+async def _api_emojis(request: web.Request, guild_id: int) -> web.Response:
+    """Emojis custom del guild, para la pestaña Emoji del popover de inserción."""
+    guild = _bot_guild(request, guild_id)
+    emojis = [
+        {"id": str(e.id), "name": e.name, "animated": e.animated, "url": str(e.url)}
+        for e in guild.emojis
+    ]
+    return web.json_response({"emojis": emojis})
+
+
+@guild_api
+async def _api_embeds_validate(request: web.Request, guild_id: int) -> web.Response:
+    """Validación en vivo para el modo JSON del editor: corre el mismo
+    validador del backend (una sola fuente de verdad, sin duplicar el schema
+    en el cliente) y devuelve el error específico o ok."""
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "body inválido"}, status=400)
+    if (data.get("content_mode") or "classic_embed") == "layout_v2":
+        err = validate_layout_v2_payload(data.get("layout"))
+    else:
+        err = validate_embeds_payload(data.get("embeds"))
+    return web.json_response({"ok": err is None, "error": err})
+
+
+# Firmas mágicas de los formatos de imagen que acepta el uploader del editor.
+def _sniff_image(data: bytes) -> str | None:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+async def _store_upload(data: bytes, guild_id: int, ext: str) -> str | None:
+    """Sube bytes de imagen (ya validados por _sniff_image) a R2.
+
+    La key deriva del md5 del CONTENIDO: subir dos veces la misma imagen
+    produce la misma key (el segundo put pisa el primero en R2, sin objeto
+    duplicado), y el frontend además ofrece "reusar archivo ya subido" para ni
+    siquiera repetir el request."""
+    digest = hashlib.md5(data, usedforsecurity=False).hexdigest()
+    return await asyncio.to_thread(
+        r2.upload_image_bytes_sync, f"panel-upload:{digest}", data, guild_id, ext
+    )
+
+
+_rate_upload: LRUDict = LRUDict(512)
+
+
+@guild_api
+async def _api_embeds_upload(request: web.Request, guild_id: int) -> web.Response:
+    ip = _client_ip(request)
+    if not _rate_ok(_rate_upload, ip, 10):
+        return web.json_response({"error": "rate limit"}, status=429)
+    if not r2.available():
+        return web.json_response(
+            {"error": "almacenamiento de imágenes no configurado"}, status=503
+        )
+    max_bytes = env_int("MAX_EMBED_IMAGE_UPLOAD_BYTES", 8 * 1024 * 1024)
+    if request.content_length and request.content_length > max_bytes:
+        return web.json_response(
+            {"error": f"la imagen supera el máximo de {max_bytes // (1024 * 1024)} MB"},
+            status=413,
+        )
+    data = await request.read()
+    if len(data) > max_bytes:
+        return web.json_response(
+            {"error": f"la imagen supera el máximo de {max_bytes // (1024 * 1024)} MB"},
+            status=413,
+        )
+    if not data:
+        return web.json_response({"error": "archivo vacío"}, status=400)
+    ext = _sniff_image(data)
+    if ext is None:
+        return web.json_response(
+            {"error": "el archivo no es una imagen válida (png, jpg, gif o webp)"},
+            status=400,
+        )
+    url = await _store_upload(data, guild_id, ext)
+    if url is None:
+        return web.json_response(
+            {"error": "no se pudo subir la imagen, intenta de nuevo"}, status=502
+        )
+    return web.json_response({"url": url})
 
 
 # ---------------- API: administración (solo bot owner) ----------------
@@ -1632,7 +1742,12 @@ async def start_web_server(bot: commands.Bot) -> None:
     global _runner
     if _runner is not None:
         return
-    app = web.Application(middlewares=[_cors_middleware])
+    # client_max_size: el default de aiohttp es 1 MiB, insuficiente para la
+    # subida de imágenes del editor de embeds (límite propio de 8 MB validado
+    # en el handler; acá va con margen para headers/overhead).
+    app = web.Application(
+        middlewares=[_cors_middleware], client_max_size=12 * 1024 * 1024
+    )
     app["bot"] = bot
     # Sesión HTTP compartida para llamadas a la API de Discord, con timeout global.
     app["http"] = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
@@ -1707,6 +1822,9 @@ async def start_web_server(bot: commands.Bot) -> None:
         )
         app.router.add_post(f"{base}/embeds/send", _api_embeds_send)
         app.router.add_post(f"{base}/embeds/schedule", _api_embeds_schedule)
+        app.router.add_post(f"{base}/embeds/validate", _api_embeds_validate)
+        app.router.add_post(f"{base}/embeds/upload", _api_embeds_upload)
+        app.router.add_get(f"{base}/emojis", _api_emojis)
         app.router.add_get(f"{base}/embeds/templates", _api_embed_templates_get)
         app.router.add_post(f"{base}/embeds/templates", _api_embed_templates_post)
         app.router.add_put(

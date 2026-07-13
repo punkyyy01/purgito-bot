@@ -1063,18 +1063,37 @@ async def get_due_scheduled_announcements() -> list[dict]:
 def normalize_embeds_json(raw: str | None) -> list[dict]:
     """Parsea embed_json a una lista de dicts de embed.
 
-    Compat hacia atrás: las filas guardadas antes de soportar múltiples
-    embeds tienen un dict suelto en vez de un array. Se envuelve en una lista
-    de un elemento al leer, sin reescribir la fila en DB — así el mismo código
-    de envío maneja formato viejo y nuevo sin ramas."""
+    Tres formatos históricos conviven en DB, todos se leen sin reescribir la
+    fila: dict suelto (un solo embed, pre-Fase 1), lista de embeds (Fase 1), y
+    wrapper {"embeds": [...], "send_options": {...}} (Fase 5, cuando el envío
+    lleva opciones finas). El mismo código de envío maneja los tres sin ramas."""
     if not raw:
         return []
     data = json.loads(raw)
     if isinstance(data, dict):
+        inner = data.get("embeds")
+        if isinstance(inner, list):
+            return inner
         return [data]
     if isinstance(data, list):
         return data
     return []
+
+
+def extract_send_options(raw: str | None) -> dict | None:
+    """Opciones de envío (silencioso/menciones) guardadas dentro de embed_json.
+    Funciona para el wrapper de embeds clásicos y para layouts V2 (ambos las
+    llevan como clave "send_options" al tope del dict). None si no hay."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(data, dict):
+        options = data.get("send_options")
+        return options if isinstance(options, dict) else None
+    return None
 
 
 def embed_template_limit(guild_id: int | None) -> int:
