@@ -514,7 +514,9 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
+.gif-card.out { opacity: 0; transform: scale(0.92); pointer-events: none; }
 .gif-card img { width: 100%; height: 110px; object-fit: cover; background: #000; border-radius: 4px; }
 .gif-placeholder {
   width: 100%;
@@ -536,6 +538,45 @@ h1 {
   max-height: 28px;
   display: block;
 }
+
+.gif-stats { margin-bottom: 12px; }
+.gif-stats .stat-num { color: var(--accent); font-weight: 700; }
+
+.gif-actions { display: flex; }
+.gif-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.gif-more-wrap { text-align: center; margin-top: 16px; }
+
+/* ---------- Toast ---------- */
+
+#toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: 13px;
+  padding: 10px 14px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease;
+  z-index: 9999;
+}
+#toast.show { opacity: 1; transform: none; }
+#toast.show.ok   { border-color: var(--success); }
+#toast.show.err  { border-color: var(--danger); }
+/* Ámbar ya usado para --premium: mismo tono de "atención" sin sumar un color nuevo a la paleta. */
+#toast.show.warn { border-color: var(--premium); }
 
 /* ---------- Responsive ---------- */
 

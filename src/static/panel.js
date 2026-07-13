@@ -62,6 +62,19 @@ function flash(container, ok, msg) {
   setTimeout(() => box.remove(), 3000);
 }
 
+// Toast flotante reusable (requiere <div id="toast"></div> en la página, ver
+// pages/panel.py). Por ahora solo lo usa el tab de GIFs — flash() se queda
+// para el resto de tabs, ver nota en la respuesta de este cambio.
+let _toastTimer = null;
+function toast(msg, type) {
+  const box = document.getElementById('toast');
+  if (!box) return;
+  box.textContent = msg;
+  box.className = 'show ' + (type || '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { box.className = ''; }, 3200);
+}
+
 function renderError(box, e) {
   box.innerHTML = '';
   box.append(el('p', { class: 'error' }, e.message));
@@ -613,6 +626,10 @@ async function loadPremium() {
 
 // ---------- GIFs ----------
 
+const GIFS_PAGE = 30;
+let _gifPool = [];
+let _gifStatsEl = null;
+
 // Misma clasificación que la galería pública (gif_gallery.py).
 function classifyGif(gif) {
   if (gif.media_url) return { type: 'img', src: gif.media_url };
@@ -655,12 +672,99 @@ function gifThumb(g) {
   return gifLinkCard(g.url);
 }
 
+// Igual que el header de gif_gallery.py: total + desglose preview/link,
+// recalculado sobre el pool en memoria (no pide de nuevo al backend).
+function updateGifStats() {
+  if (!_gifStatsEl) return;
+  let preview = 0, link = 0;
+  for (const g of _gifPool) {
+    if (classifyGif(g).type === 'link') link++; else preview++;
+  }
+  _gifStatsEl.innerHTML = '';
+  _gifStatsEl.append(
+    el('strong', { class: 'stat-num' }, String(_gifPool.length)), ' GIFs — ',
+    el('strong', { class: 'stat-num' }, String(preview)), ' con preview · ',
+    el('strong', { class: 'stat-num' }, String(link)), ' como link');
+}
+
+function syncGifMore() {
+  const grid = document.getElementById('gifGrid');
+  const btn = document.getElementById('gifMoreBtn');
+  if (!grid || !btn) return;
+  const left = _gifPool.length - grid.querySelectorAll('.gif-card').length;
+  btn.parentElement.style.display = left > 0 ? '' : 'none';
+  if (left > 0) btn.textContent = `Cargar más (${left} restantes)`;
+}
+
+function renderGifBatch() {
+  const grid = document.getElementById('gifGrid');
+  if (!grid) return;
+  const from = grid.querySelectorAll('.gif-card').length;
+  const frag = document.createDocumentFragment();
+  for (const g of _gifPool.slice(from, from + GIFS_PAGE)) frag.append(gifCard(g));
+  grid.append(frag);
+  syncGifMore();
+}
+
+// Confirmación de borrado en dos pasos (mismo patrón que attachDelBtn/
+// askConfirm de gif_gallery.py): "Quitar" -> "¿Seguro? ✓ ✗" -> ejecuta o revierte.
+function gifDeleteActions(gifId, card) {
+  const wrap = el('div', { class: 'gif-actions' });
+
+  function showButton() {
+    wrap.innerHTML = '';
+    wrap.append(el('button', { class: 'btn btn-danger btn-sm', onclick: showConfirm }, 'Quitar'));
+  }
+  function showConfirm() {
+    wrap.innerHTML = '';
+    wrap.append(el('div', { class: 'gif-confirm' },
+      '¿Seguro?',
+      el('button', { class: 'btn btn-danger btn-sm', onclick: doDelete }, '✓'),
+      el('button', { class: 'btn btn-secondary btn-sm', onclick: showButton }, '✗')));
+  }
+  async function doDelete() {
+    try {
+      const resp = await apiFetch(`/api/server/${GUILD_ID}/settings/gifs/${gifId}`, { method: 'DELETE' });
+      if (!resp.deleted) {
+        toast('No se encontró ese GIF', 'warn');
+        showButton();
+        return;
+      }
+      toast('GIF eliminado', 'ok');
+      card.classList.add('out');
+      _gifPool = _gifPool.filter(g => g.id !== gifId);
+      updateGifStats();
+      setTimeout(() => { card.remove(); syncGifMore(); }, 240);
+    } catch (e) {
+      toast(e.status === 429 ? 'Rate limit — espera antes de borrar más' : e.message, e.status === 429 ? 'warn' : 'err');
+      showButton();
+    }
+  }
+
+  showButton();
+  return wrap;
+}
+
+function gifCard(g) {
+  const card = el('div', { class: 'gif-card' },
+    gifThumb(g),
+    el('a', { class: 'gif-url', href: g.url, target: '_blank', rel: 'noopener' }, g.url));
+  card.append(gifDeleteActions(g.id, card));
+  return card;
+}
+
 async function loadGifs() {
   const box = content();
   box.append(spinner());
   try {
     const data = await apiFetch(`/api/server/${GUILD_ID}/settings/gifs`);
     box.innerHTML = '';
+
+    _gifPool = data.gifs;
+    _gifStatsEl = el('p', { class: 'dim gif-stats' });
+    box.append(_gifStatsEl);
+    updateGifStats();
+
     const input = el('input', { type: 'text', placeholder: 'https://tenor.com/… o URL de R2', style: 'flex:1' });
     box.append(el('div', { class: 'add-row' }, input,
       el('button', {
@@ -669,21 +773,32 @@ async function loadGifs() {
           const url = input.value.trim();
           if (!url) return;
           try {
-            await apiFetch(`/api/server/${GUILD_ID}/settings/gifs`, {
+            const addResp = await apiFetch(`/api/server/${GUILD_ID}/settings/gifs`, {
               method: 'POST', body: { url },
             });
-            loadGifs();
-          } catch (e) { flash(box, false, e.message); }
+            if (addResp.inserted) {
+              toast('GIF agregado', 'ok');
+              loadGifs();
+            } else {
+              toast('Ese GIF ya estaba guardado', 'warn');
+            }
+          } catch (e) {
+            toast(e.status === 429 ? 'Rate limit — espera antes de agregar más' : e.message, e.status === 429 ? 'warn' : 'err');
+          }
         },
       }, 'Agregar')));
-    const grid = el('div', { class: 'gif-grid' });
-    if (!data.gifs.length) box.append(emptyState('Todavía no hay GIFs guardados — añade uno con el campo de arriba.'));
-    for (const g of data.gifs) {
-      grid.append(el('div', { class: 'gif-card' },
-        gifThumb(g),
-        el('a', { class: 'gif-url', href: g.url, target: '_blank', rel: 'noopener' }, g.url),
-        delBtn(box, () => apiFetch(`/api/server/${GUILD_ID}/settings/gifs/${g.id}`, { method: 'DELETE' }), loadGifs)));
+
+    if (!_gifPool.length) {
+      box.append(emptyState('Todavía no hay GIFs guardados — añade uno con el campo de arriba.'));
+      return;
     }
+
+    const grid = el('div', { class: 'gif-grid', id: 'gifGrid' });
     box.append(grid);
+    renderGifBatch();
+
+    const moreBtn = el('button', { class: 'btn btn-secondary', id: 'gifMoreBtn', onclick: renderGifBatch }, 'Cargar más');
+    box.append(el('div', { class: 'gif-more-wrap' }, moreBtn));
+    syncGifMore();
   } catch (e) { renderError(box, e); }
 }

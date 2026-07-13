@@ -21,6 +21,7 @@ PANEL_HTML = """<!DOCTYPE html>
   <h1 id="catTitle"></h1>
   <div id="catContent"></div>
 </main>
+<div id="toast"></div>
 <script>const GUILD_ID = "{{GUILD_ID}}";</script>
 <script src="/static/panel.js"></script>
 <script>initPanel();</script>
