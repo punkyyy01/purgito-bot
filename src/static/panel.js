@@ -681,8 +681,11 @@ function modeRadio(mode, label) {
 
 async function renderEmbedEditor(box) {
   box.append(spinner());
-  let channels;
-  try { channels = await getChannels(); }
+  let channels, roles;
+  // roles solo lo usa el modo Layout (botones de "asignar rol"), pero
+  // getChannels/getRoles cachean tras la primera visita, así que pedirlo
+  // siempre es barato y evita otro roundtrip al cambiar de modo.
+  try { [channels, roles] = await Promise.all([getChannels(), getRoles()]); }
   catch (e) { renderError(box, e); return; }
   box.innerHTML = '';
 
@@ -692,7 +695,7 @@ async function renderEmbedEditor(box) {
     modeRadio('layout', 'Layout V2')));
   const inner = el('div', {});
   box.append(inner);
-  if (_embedMode === 'layout') renderLayoutEditor(inner, channels);
+  if (_embedMode === 'layout') renderLayoutEditor(inner, channels, roles);
   else renderClassicEditor(inner, channels);
 }
 
@@ -935,16 +938,29 @@ function blankLayoutDoc() {
 
 function newBlock(type) {
   if (type === 'text') return { type: 'text', content: '' };
-  if (type === 'section') return { type: 'section', texts: [''], accessory: { type: 'thumbnail', url: '', description: '', label: '' } };
+  if (type === 'section') return { type: 'section', texts: [''], accessory: { type: 'thumbnail', url: '', description: '', label: '', style: 'link', role_id: '' } };
   if (type === 'media_gallery') return { type: 'media_gallery', items: [{ url: '', description: '' }] };
   if (type === 'separator') return { type: 'separator', visible: true, spacing: 'small' };
-  if (type === 'action_row') return { type: 'action_row', buttons: [{ style: 'link', label: '', url: '' }] };
+  if (type === 'action_row') return { type: 'action_row', buttons: [{ style: 'link', label: '', url: '', role_id: '' }] };
   return { type: 'container', accent: true, accent_color: '#8B6EF5', children: [] };
 }
 
 function colorToHex(c) {
   if (typeof c === 'number') return '#' + c.toString(16).padStart(6, '0');
   return typeof c === 'string' ? c : null;
+}
+
+// Estado de un botón del editor -> dict API. Botones "role" nunca llevan
+// custom_id desde el frontend — lo asigna el backend recién al enviar/programar.
+function buttonToApi(bt) {
+  if (bt.style === 'role') {
+    return { style: 'role', label: bt.label, role_id: bt.role_id ? parseInt(bt.role_id, 10) : null };
+  }
+  return { style: 'link', label: bt.label, url: bt.url };
+}
+
+function buttonFromApi(bt) {
+  return { style: bt.style === 'role' ? 'role' : 'link', label: bt.label || '', url: bt.url || '', role_id: bt.role_id != null ? String(bt.role_id) : '' };
 }
 
 // Estado del editor -> dict de bloque estilo API (lo que valida/construye el backend).
@@ -956,12 +972,12 @@ function blockToApi(b) {
   if (b.type === 'section') {
     const acc = b.accessory.type === 'thumbnail'
       ? { type: 'thumbnail', url: b.accessory.url, description: b.accessory.description }
-      : { type: 'button', style: 'link', label: b.accessory.label, url: b.accessory.url };
+      : { type: 'button', ...buttonToApi(b.accessory) };
     return { type: 'section', texts: b.texts.slice(), accessory: acc };
   }
   if (b.type === 'media_gallery') return { type: 'media_gallery', items: b.items.map(it => ({ url: it.url, description: it.description })) };
   if (b.type === 'separator') return { type: 'separator', visible: b.visible, spacing: b.spacing };
-  return { type: 'action_row', buttons: b.buttons.map(bt => ({ style: 'link', label: bt.label, url: bt.url })) };
+  return { type: 'action_row', buttons: b.buttons.map(buttonToApi) };
 }
 
 // Inverso: dict de bloque guardado -> estado del editor.
@@ -969,11 +985,11 @@ function apiToBlock(b) {
   if (b.type === 'container') return { type: 'container', accent: b.accent_color != null, accent_color: colorToHex(b.accent_color) || '#8B6EF5', children: (b.children || []).map(apiToBlock) };
   if (b.type === 'section') {
     const a = b.accessory || {};
-    return { type: 'section', texts: (b.texts || ['']).slice(), accessory: { type: a.type === 'button' ? 'button' : 'thumbnail', url: a.url || '', description: a.description || '', label: a.label || '' } };
+    return { type: 'section', texts: (b.texts || ['']).slice(), accessory: { type: a.type === 'button' ? 'button' : 'thumbnail', url: a.url || '', description: a.description || '', ...buttonFromApi(a) } };
   }
   if (b.type === 'media_gallery') return { type: 'media_gallery', items: (b.items || []).map(it => ({ url: it.url || '', description: it.description || '' })) };
   if (b.type === 'separator') return { type: 'separator', visible: b.visible !== false, spacing: b.spacing || 'small' };
-  if (b.type === 'action_row') return { type: 'action_row', buttons: (b.buttons || []).map(bt => ({ style: 'link', label: bt.label || '', url: bt.url || '' })) };
+  if (b.type === 'action_row') return { type: 'action_row', buttons: (b.buttons || []).map(buttonFromApi) };
   return { type: 'text', content: b.content || '' };
 }
 
@@ -986,9 +1002,9 @@ function docFromLayout(layout, templateId, templateName) {
 }
 
 // Lista editable de bloques (recursiva: un container tiene su propia lista).
-function renderBlocks(listEl, blocks, inContainer, onChange) {
+function renderBlocks(listEl, blocks, inContainer, onChange, roles) {
   listEl.innerHTML = '';
-  blocks.forEach((_, i) => listEl.append(renderBlockCard(listEl, blocks, i, inContainer, onChange)));
+  blocks.forEach((_, i) => listEl.append(renderBlockCard(listEl, blocks, i, inContainer, onChange, roles)));
   const adder = el('div', { class: 'add-row layout-adder' });
   const types = [['text', '+ Texto'], ['section', '+ Sección'], ['media_gallery', '+ Galería'],
                  ['separator', '+ Separador'], ['action_row', '+ Botones']];
@@ -996,15 +1012,15 @@ function renderBlocks(listEl, blocks, inContainer, onChange) {
   for (const [t, label] of types) {
     adder.append(el('button', {
       class: 'btn btn-secondary btn-sm',
-      onclick: () => { blocks.push(newBlock(t)); renderBlocks(listEl, blocks, inContainer, onChange); onChange(); },
+      onclick: () => { blocks.push(newBlock(t)); renderBlocks(listEl, blocks, inContainer, onChange, roles); onChange(); },
     }, label));
   }
   listEl.append(adder);
 }
 
-function renderBlockCard(listEl, blocks, i, inContainer, onChange) {
+function renderBlockCard(listEl, blocks, i, inContainer, onChange, roles) {
   const b = blocks[i];
-  function rerender() { renderBlocks(listEl, blocks, inContainer, onChange); onChange(); }
+  function rerender() { renderBlocks(listEl, blocks, inContainer, onChange, roles); onChange(); }
   const head = el('div', { class: 'layout-block-head' },
     el('span', { class: 'layout-block-type' }, BLOCK_LABELS[b.type]),
     el('span', { class: 'layout-block-actions' },
@@ -1012,10 +1028,30 @@ function renderBlockCard(listEl, blocks, i, inContainer, onChange) {
       el('button', { class: 'btn btn-secondary btn-sm', disabled: i === blocks.length - 1 || null, onclick: () => { [blocks[i + 1], blocks[i]] = [blocks[i], blocks[i + 1]]; rerender(); } }, '↓'),
       el('button', { class: 'btn btn-danger btn-sm', onclick: () => { blocks.splice(i, 1); rerender(); } }, '✗')));
   return el('div', { class: 'layout-block' }, head,
-    el('div', { class: 'layout-block-body' }, renderBlockForm(b, onChange)));
+    el('div', { class: 'layout-block-body' }, renderBlockForm(b, onChange, roles)));
 }
 
-function renderBlockForm(b, onChange) {
+// Campos de un botón: selector Enlace/Asignar rol + los inputs correspondientes.
+function buttonStyleFields(bt, onChange, roles) {
+  const styleSel = el('select', {}, el('option', { value: 'link' }, 'Enlace'), el('option', { value: 'role' }, 'Asignar rol'));
+  styleSel.value = bt.style || 'link';
+  const label = el('input', { type: 'text', placeholder: 'Texto del botón', maxlength: '80', value: bt.label });
+  label.oninput = () => { bt.label = label.value; onChange(); };
+  const urlInput = el('input', { type: 'url', placeholder: 'https://…', value: bt.url || '' });
+  urlInput.oninput = () => { bt.url = urlInput.value; onChange(); };
+  const roleSel = roleSelect(roles, bt.role_id, 'Elegir rol…');
+  roleSel.onchange = () => { bt.role_id = roleSel.value; onChange(); };
+  function sync() {
+    const isRole = styleSel.value === 'role';
+    urlInput.style.display = isRole ? 'none' : '';
+    roleSel.style.display = isRole ? '' : 'none';
+  }
+  styleSel.onchange = () => { bt.style = styleSel.value; sync(); onChange(); };
+  sync();
+  return el('div', { class: 'add-row layout-btn-fields' }, styleSel, label, urlInput, roleSel);
+}
+
+function renderBlockForm(b, onChange, roles) {
   if (b.type === 'text') {
     const ta = el('textarea', { class: 'autogrow', placeholder: 'Texto (markdown de Discord)' });
     ta.value = b.content;
@@ -1052,14 +1088,11 @@ function renderBlockForm(b, onChange) {
     function renderBtns() {
       box.innerHTML = '';
       b.buttons.forEach((bt, idx) => {
-        const label = el('input', { type: 'text', placeholder: 'Texto del botón', value: bt.label });
-        label.oninput = () => { bt.label = label.value; onChange(); };
-        const url = el('input', { type: 'url', placeholder: 'https://…', value: bt.url });
-        url.oninput = () => { bt.url = url.value; onChange(); };
-        box.append(el('div', { class: 'add-row' }, el('span', { class: 'dim' }, '🔗'), label, url,
+        box.append(el('div', { class: 'layout-btn-row' },
+          buttonStyleFields(bt, onChange, roles),
           el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.buttons.splice(idx, 1); renderBtns(); onChange(); } }, '✗')));
       });
-      box.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.buttons.length >= 5 || null, onclick: () => { b.buttons.push({ style: 'link', label: '', url: '' }); renderBtns(); onChange(); } }, '+ Botón enlace'));
+      box.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.buttons.length >= 5 || null, onclick: () => { b.buttons.push({ style: 'link', label: '', url: '', role_id: '' }); renderBtns(); onChange(); } }, '+ Botón'));
     }
     renderBtns();
     return box;
@@ -1078,7 +1111,7 @@ function renderBlockForm(b, onChange) {
       textsBox.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.texts.length >= 3 || null, onclick: () => { b.texts.push(''); renderTexts(); onChange(); } }, '+ Texto'));
     }
     renderTexts();
-    const accType = el('select', {}, el('option', { value: 'thumbnail' }, 'Miniatura'), el('option', { value: 'button' }, 'Botón (enlace)'));
+    const accType = el('select', {}, el('option', { value: 'thumbnail' }, 'Miniatura'), el('option', { value: 'button' }, 'Botón'));
     accType.value = b.accessory.type;
     const accBox = el('div', {});
     function renderAcc() {
@@ -1090,11 +1123,7 @@ function renderBlockForm(b, onChange) {
         desc.oninput = () => { b.accessory.description = desc.value; onChange(); };
         accBox.append(el('div', { class: 'add-row' }, url, desc));
       } else {
-        const label = el('input', { type: 'text', placeholder: 'Texto del botón', value: b.accessory.label });
-        label.oninput = () => { b.accessory.label = label.value; onChange(); };
-        const url = el('input', { type: 'url', placeholder: 'https://…', value: b.accessory.url });
-        url.oninput = () => { b.accessory.url = url.value; onChange(); };
-        accBox.append(el('div', { class: 'add-row' }, label, url));
+        accBox.append(buttonStyleFields(b.accessory, onChange, roles));
       }
     }
     accType.onchange = () => { b.accessory.type = accType.value; renderAcc(); onChange(); };
@@ -1111,7 +1140,7 @@ function renderBlockForm(b, onChange) {
   colorInp.oninput = () => { b.accent_color = colorInp.value; onChange(); };
   box.append(el('div', { class: 'add-row' }, el('label', { class: 'toggle' }, accentChk, 'Barra de color'), colorInp));
   const nested = el('div', { class: 'layout-nested' });
-  renderBlocks(nested, b.children, true, onChange);
+  renderBlocks(nested, b.children, true, onChange, roles);
   box.append(nested);
   return box;
 }
@@ -1122,6 +1151,13 @@ function renderLayoutPreview(blocks) {
   const wrap = el('div', { class: 'lv2-preview' });
   for (const b of blocks) wrap.append(renderPreviewBlock(b));
   return wrap;
+}
+
+// Botón del preview: los de "asignar rol" llevan una etiqueta de texto (sin
+// emoji, mismo criterio del resto del panel) para distinguirlos de un link.
+function lv2Button(bt) {
+  return el('span', { class: 'lv2-btn' + (bt.style === 'role' ? ' lv2-btn-role' : '') },
+    bt.label || 'botón', bt.style === 'role' ? el('span', { class: 'lv2-btn-tag' }, 'ROL') : null);
 }
 
 function renderPreviewBlock(b) {
@@ -1137,7 +1173,7 @@ function renderPreviewBlock(b) {
     const texts = el('div', { class: 'lv2-section-texts' }, b.texts.map(t => el('div', { class: 'lv2-text' }, t)));
     let acc;
     if (b.accessory.type === 'thumbnail') acc = b.accessory.url ? embedImg({ src: b.accessory.url, alt: '', class: 'lv2-thumb' }) : null;
-    else acc = el('span', { class: 'lv2-btn' }, b.accessory.label || 'botón');
+    else acc = lv2Button(b.accessory);
     return el('div', { class: 'lv2-section' }, texts, el('div', { class: 'lv2-accessory' }, acc));
   }
   if (b.type === 'media_gallery') {
@@ -1146,11 +1182,11 @@ function renderPreviewBlock(b) {
     return grid;
   }
   if (b.type === 'separator') return el('div', { class: 'lv2-sep' + (b.visible ? ' visible' : '') });
-  if (b.type === 'action_row') return el('div', { class: 'lv2-row' }, b.buttons.map(bt => el('span', { class: 'lv2-btn' }, bt.label || 'botón')));
+  if (b.type === 'action_row') return el('div', { class: 'lv2-row' }, b.buttons.map(lv2Button));
   return el('div', {});
 }
 
-function renderLayoutEditor(box, channels) {
+function renderLayoutEditor(box, channels, roles) {
   if (!_layoutDoc) _layoutDoc = blankLayoutDoc();
   const doc = _layoutDoc;
 
@@ -1164,7 +1200,7 @@ function renderLayoutEditor(box, channels) {
   }
 
   const blocksList = el('div', { class: 'layout-list' });
-  renderBlocks(blocksList, doc.blocks, false, updatePreview);
+  renderBlocks(blocksList, doc.blocks, false, updatePreview, roles);
 
   // destino + modo de envío (persistidos en el doc), misma UX que el clásico.
   const chSel = channelSelect(channels, doc.channelId, 'Canal destino…');

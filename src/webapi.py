@@ -47,6 +47,7 @@ from config import (
 from cogs.premium import is_premium_guild, set_premium, unset_premium
 from cogs.youtube import get_latest_video
 from db import (
+    add_button_action,
     add_embed_template,
     add_frase_especial,
     add_ignored_channel,
@@ -80,7 +81,11 @@ from db import (
     update_last_video_id,
 )
 from gif_gallery import GIF_GALLERY_HTML
-from layout_v2 import build_layout_view, validate_layout_v2_payload
+from layout_v2 import (
+    assign_button_custom_ids,
+    build_layout_view,
+    validate_layout_v2_payload,
+)
 from pages.panel import PANEL_HTML
 from pages.selector import SELECTOR_HTML
 from utils import LRUDict
@@ -1119,6 +1124,31 @@ def _extract_content(data: dict) -> tuple[str, str, str, str | None]:
     return "classic_embed", json.dumps(embeds), preview, None
 
 
+async def _register_role_buttons(bot, guild_id: int, assignments: list[dict]) -> None:
+    """Persiste el mapeo custom_id -> rol (layout_button_actions) y registra
+    los botones nuevos como vista persistente EN VIVO, para que funcionen sin
+    esperar el próximo reinicio del bot. `assignments` sale de
+    layout_v2.assign_button_custom_ids (vacío si el layout no tiene botones de
+    rol nuevos, en cuyo caso esto no hace nada)."""
+    if not assignments:
+        return
+    from cogs.layout_buttons import register_button_actions
+
+    rows = []
+    for a in assignments:
+        action_data = json.dumps({"role_id": a["role_id"]})
+        await add_button_action(a["custom_id"], guild_id, "role_toggle", action_data)
+        rows.append(
+            {
+                "custom_id": a["custom_id"],
+                "guild_id": guild_id,
+                "action_type": "role_toggle",
+                "action_data": action_data,
+            }
+        )
+    await register_button_actions(bot, rows)
+
+
 def _embed_target_channel(request: web.Request, guild_id: int, channel_id: int | None):
     """(canal, None) si el canal es del guild y el bot puede mandar embeds ahí;
     si no, (None, respuesta de error)."""
@@ -1159,7 +1189,10 @@ async def _api_embeds_send(request: web.Request, guild_id: int) -> web.Response:
         return denied
     try:
         if mode == "layout_v2":
-            await channel.send(view=build_layout_view(data["layout"]))
+            layout = data["layout"]
+            assignments = assign_button_custom_ids(layout)
+            await _register_role_buttons(request.app["bot"], guild_id, assignments)
+            await channel.send(view=build_layout_view(layout))
         else:
             await channel.send(
                 embeds=[discord.Embed.from_dict(e) for e in data["embeds"]]
@@ -1185,6 +1218,16 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
     channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
     if denied is not None:
         return denied
+
+    if content_mode == "layout_v2":
+        # Mintea los custom_id de botones de rol UNA vez, acá: el JSON con los
+        # custom_id ya horneados es lo que queda guardado en embed_json, así
+        # que cada disparo periódico del anuncio reutiliza el mismo mapeo
+        # (nunca se re-mintea en el loop de anuncios.py).
+        layout = data["layout"]
+        assignments = assign_button_custom_ids(layout)
+        await _register_role_buttons(request.app["bot"], guild_id, assignments)
+        payload = json.dumps(layout)
 
     # `mode` es la cadencia del anuncio (interval/daily), distinta de content_mode.
     mode = data.get("mode")

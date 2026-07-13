@@ -45,6 +45,7 @@ EXTENSIONS = [
     "cogs.anuncios",
     "cogs.general",
     "cogs.settings",
+    "cogs.layout_buttons",
 ]
 
 intents = discord.Intents.default()

@@ -143,6 +143,15 @@ CREATE TABLE IF NOT EXISTS embed_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_embed_templates_guild ON embed_templates(guild_id);
 
+CREATE TABLE IF NOT EXISTS layout_button_actions (
+    custom_id TEXT PRIMARY KEY,
+    guild_id INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    action_data TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_layout_button_actions_guild ON layout_button_actions(guild_id);
+
 CREATE TABLE IF NOT EXISTS corpus_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
@@ -1178,6 +1187,51 @@ async def delete_embed_template(template_id: int, guild_id: int) -> bool:
     return deleted
 
 
+# ─── Botones de layouts con acción funcional (Fase 3) ────────────────────────
+
+
+async def add_button_action(
+    custom_id: str, guild_id: int, action_type: str, action_data: str
+) -> None:
+    """Guarda (o actualiza) el mapeo custom_id -> acción de un botón de layout.
+    INSERT OR REPLACE porque custom_id es la clave: reintentar el registro de
+    un botón ya existente (ej. reintento de red) no debe fallar por UNIQUE."""
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "INSERT OR REPLACE INTO layout_button_actions "
+            "(custom_id, guild_id, action_type, action_data) VALUES (?, ?, ?, ?)",
+            (custom_id, guild_id, action_type, action_data),
+        )
+        await db.commit()
+
+
+async def get_button_action(custom_id: str) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT custom_id, guild_id, action_type, action_data "
+        "FROM layout_button_actions WHERE custom_id=?",
+        (custom_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"custom_id": row[0], "guild_id": row[1], "action_type": row[2], "action_data": row[3]}
+
+
+async def list_button_actions() -> list[dict]:
+    """Todas las filas, para reconstruir la vista persistente al arrancar el bot."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT custom_id, guild_id, action_type, action_data FROM layout_button_actions"
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {"custom_id": r[0], "guild_id": r[1], "action_type": r[2], "action_data": r[3]}
+        for r in rows
+    ]
+
+
 async def update_announcement_last_sent(announcement_id: int) -> None:
     db = await get_db()
     async with _db_lock:
@@ -1589,6 +1643,7 @@ async def purge_guild_data(guild_id: int) -> None:
         "meme_schedule",
         "scheduled_announcements",
         "embed_templates",
+        "layout_button_actions",
         "frases_especiales",
         "reaction_pool",
         "premium_guilds",

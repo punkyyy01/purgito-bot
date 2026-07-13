@@ -13,7 +13,12 @@ import pytest
 
 import db
 from cogs.anuncios import Anuncios
-from layout_v2 import build_layout_view, validate_layout_v2_payload
+from layout_v2 import (
+    ROLE_TOGGLE_PREFIX,
+    assign_button_custom_ids,
+    build_layout_view,
+    validate_layout_v2_payload,
+)
 from webapi import validate_embed_payload, validate_embeds_payload
 
 
@@ -413,3 +418,90 @@ def test_scheduled_announcement_layout_v2_branch(memory_db):
     kwargs = channel.send.await_args.kwargs
     assert isinstance(kwargs.get("view"), discord.ui.LayoutView)
     assert "embeds" not in kwargs and "embed" not in kwargs
+
+
+# ─── Botones de rol (Fase 3): validate_layout_v2_payload + estilo 'role' ─────
+
+
+def test_role_button_valid():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "role", "label": "Suscriptor", "role_id": 555},
+    ]}]}
+    assert validate_layout_v2_payload(layout) is None
+
+
+def test_role_button_accepts_numeric_string_role_id():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "role", "label": "x", "role_id": "555"},
+    ]}]}
+    assert validate_layout_v2_payload(layout) is None
+
+
+def test_role_button_requires_role_id():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "role", "label": "x"},
+    ]}]}
+    assert validate_layout_v2_payload(layout) is not None
+
+
+def test_role_button_rejects_non_numeric_role_id():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "role", "label": "x", "role_id": "abc"},
+    ]}]}
+    assert validate_layout_v2_payload(layout) is not None
+
+
+def test_unknown_button_style_rejected():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "modal", "label": "x"},
+    ]}]}
+    assert validate_layout_v2_payload(layout) is not None
+
+
+def test_section_accessory_role_button_valid():
+    layout = {"blocks": [{"type": "section", "texts": ["hola"], "accessory": {
+        "type": "button", "style": "role", "label": "Rol", "role_id": 1,
+    }}]}
+    assert validate_layout_v2_payload(layout) is None
+
+
+# ─── assign_button_custom_ids ────────────────────────────────────────────────
+
+
+def test_assign_custom_ids_only_role_buttons():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "link", "label": "Ir", "url": "https://x"},
+        {"style": "role", "label": "Suscriptor", "role_id": 555},
+    ]}]}
+    assigned = assign_button_custom_ids(layout)
+    assert len(assigned) == 1
+    assert assigned[0]["role_id"] == 555
+    link_btn, role_btn = layout["blocks"][0]["buttons"]
+    assert "custom_id" not in link_btn
+    assert role_btn["custom_id"].startswith(ROLE_TOGGLE_PREFIX)
+
+
+def test_assign_custom_ids_idempotent():
+    layout = {"blocks": [{"type": "action_row", "buttons": [
+        {"style": "role", "label": "x", "role_id": 1},
+    ]}]}
+    first = assign_button_custom_ids(layout)
+    cid = layout["blocks"][0]["buttons"][0]["custom_id"]
+    second = assign_button_custom_ids(layout)
+    assert len(first) == 1
+    assert second == []  # ya tenía custom_id: no se reasigna ni se re-reporta
+    assert layout["blocks"][0]["buttons"][0]["custom_id"] == cid
+
+
+def test_assign_custom_ids_walks_nested_container_and_section():
+    layout = {"blocks": [
+        {"type": "container", "children": [
+            {"type": "action_row", "buttons": [{"style": "role", "label": "a", "role_id": 1}]},
+        ]},
+        {"type": "section", "texts": ["t"], "accessory": {
+            "type": "button", "style": "role", "label": "b", "role_id": 2,
+        }},
+    ]}
+    assigned = assign_button_custom_ids(layout)
+    assert len(assigned) == 2
+    assert {a["role_id"] for a in assigned} == {1, 2}

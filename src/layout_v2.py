@@ -15,10 +15,21 @@ donde cada block es uno de:
     {"type": "separator", "visible": bool, "spacing": "small"|"large"}
     {"type": "action_row", "buttons": [<button>, ...(1-5)]}
     accessory thumbnail: {"type": "thumbnail", "url": str, "description": str?}
-    button (Fase 2: solo link): {"style": "link", "label": str, "url": str}
+    button, dos estilos:
+        link: {"style": "link", "label": str, "url": str}
+        role (Fase 3, toggle de rol): {"style": "role", "label": str, "role_id": int,
+              "custom_id": str?} — custom_id lo asigna el backend (ver
+              assign_button_custom_ids), nunca el frontend.
 """
 
+import uuid
+
 import discord
+
+# Prefijo de custom_id de los botones de "asignar/quitar rol", para poder
+# reconocerlos sin colisionar con custom_ids de otros cogs (ej. np_* de música,
+# purgito_setup_btn de bienvenida).
+ROLE_TOGGLE_PREFIX = "purgito_role_toggle_"
 
 MAX_COMPONENTS = 40  # total de componentes por mensaje (incluye anidados)
 MAX_TEXT_TOTAL = 4000  # suma de caracteres de TODOS los TextDisplay del layout
@@ -49,15 +60,24 @@ def _validate_button(btn) -> str | None:
     label = (btn.get("label") or "").strip()
     if len(label) > MAX_BUTTON_LABEL:
         return f"el texto del botón supera los {MAX_BUTTON_LABEL} caracteres"
-    # Fase 2: solo botones de enlace (los de acción/rol llegan en Fase 3).
-    if btn.get("style", "link") != "link":
-        return "tipo de botón no soportado todavía (solo enlaces por ahora)"
-    url = (btn.get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        return "un botón de enlace necesita una URL http(s)"
     if not label:
-        return "un botón de enlace necesita un texto"
-    return None
+        return "un botón necesita un texto"
+    style = btn.get("style", "link")
+    if style == "link":
+        url = (btn.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return "un botón de enlace necesita una URL http(s)"
+        return None
+    if style == "role":
+        role_id = btn.get("role_id")
+        # Acepta int o string numérica (el frontend manda el value de un <select>).
+        if isinstance(role_id, bool) or not (
+            isinstance(role_id, int)
+            or (isinstance(role_id, str) and role_id.strip().isdigit())
+        ):
+            return "un botón de rol necesita un role_id válido"
+        return None
+    return "tipo de botón no soportado (usa 'link' o 'role')"
 
 
 def _validate_accessory(acc, state) -> str | None:
@@ -145,10 +165,56 @@ def validate_layout_v2_payload(layout) -> str | None:
     return None
 
 
+# ─── Asignación de custom_id (botones de rol) ────────────────────────────────
+
+
+def _iter_buttons(blocks):
+    """Recorre un layout y produce cada dict de botón (los de action_row y los
+    de accessory tipo botón de una section), sin importar el anidado en containers."""
+    for b in blocks:
+        kind = b.get("type")
+        if kind == "container":
+            yield from _iter_buttons(b.get("children", []) or [])
+        elif kind == "action_row":
+            yield from (b.get("buttons", []) or [])
+        elif kind == "section":
+            acc = b.get("accessory")
+            if isinstance(acc, dict) and acc.get("type") == "button":
+                yield acc
+
+
+def assign_button_custom_ids(layout: dict) -> list[dict]:
+    """Genera un custom_id para cada botón de rol que todavía no tenga uno
+    (mutando el layout in place) y devuelve solo las asignaciones NUEVAS como
+    [{"custom_id", "role_id"}], para que el caller las persista en
+    layout_button_actions y registre la vista en vivo.
+
+    Los botones link no reciben custom_id (no despachan interacción). Es
+    idempotente: un botón que ya trae custom_id (ej. un anuncio programado que
+    se re-serializa sin cambios) no se reasigna, así el mismo click sigue
+    apuntando al mismo mapeo en sucesivos envíos periódicos."""
+    assigned = []
+    for btn in _iter_buttons(layout.get("blocks", []) or []):
+        if btn.get("style") == "role" and not btn.get("custom_id"):
+            cid = f"{ROLE_TOGGLE_PREFIX}{uuid.uuid4().hex}"
+            btn["custom_id"] = cid
+            assigned.append({"custom_id": cid, "role_id": int(btn["role_id"])})
+    return assigned
+
+
 # ─── Construcción ────────────────────────────────────────────────────────────
 
 
 def _build_button(btn) -> discord.ui.Button:
+    if btn.get("style") == "role":
+        # Sin callback local: el click lo despacha la vista persistente
+        # genérica registrada por cogs/layout_buttons.py, que matchea por
+        # custom_id sin importar qué objeto de View lo envió originalmente.
+        return discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=(btn.get("label") or "").strip(),
+            custom_id=btn["custom_id"],
+        )
     return discord.ui.Button(
         style=discord.ButtonStyle.link,
         label=(btn.get("label") or "").strip(),

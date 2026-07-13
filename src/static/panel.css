@@ -711,7 +711,9 @@ h1 {
 .lv2-sep.visible { border-top: 1px solid #3f4147; height: 0; margin: 4px 0; }
 .lv2-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .lv2-btn {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: #4E5058;
   color: #fff;
   font-size: 13px;
@@ -719,6 +721,20 @@ h1 {
   padding: 6px 12px;
   border-radius: 6px;
 }
+.lv2-btn-role { background: color-mix(in srgb, #4E5058 70%, var(--accent)); }
+.lv2-btn-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* Fila de un botón dentro de un ActionRow: campos + borrar. */
+.layout-btn-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.layout-btn-fields { flex: 1; flex-wrap: wrap; }
+.layout-btn-fields select, .layout-btn-fields input { min-width: 120px; }
 
 /* Preview con la estética de un embed real de Discord (colores propios del
    preview, no tokens del panel: tiene que parecerse a Discord, no al panel). */
