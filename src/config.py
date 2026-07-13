@@ -40,6 +40,21 @@ def env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_int_or_none(name: str) -> int | None:
+    """Como env_int, pero sin default numérico: ausente, vacío (os.getenv
+    devuelve "" en vez de aplicar un default) o no-numérico -> None sin excepción.
+    "0" también resuelve a None (mismo sentinel de "sin valor" que ya usaba
+    BOT_OWNER_ID antes de esta función)."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value or None
+
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 ENABLE_MESSAGE_CONTENT = os.getenv(
     "ENABLE_MESSAGE_CONTENT", "true"
@@ -47,7 +62,7 @@ ENABLE_MESSAGE_CONTENT = os.getenv(
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 BOT_TRIGGER_NAME = os.getenv("BOT_TRIGGER_NAME", "artemis").strip().lower()
-BOT_OWNER_ID: int | None = int(os.getenv("BOT_OWNER_ID", "0")) or None
+BOT_OWNER_ID: int | None = _env_int_or_none("BOT_OWNER_ID")
 # ID fijo del servidor original PURG4TORY — siempre premium, sin pasar por la tabla.
 PURGATORY_GUILD_ID = 1434103563214393347
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
