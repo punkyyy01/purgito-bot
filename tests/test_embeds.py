@@ -13,7 +13,8 @@ import pytest
 
 import db
 from cogs.anuncios import Anuncios
-from webapi import validate_embed_payload
+from layout_v2 import build_layout_view, validate_layout_v2_payload
+from webapi import validate_embed_payload, validate_embeds_payload
 
 
 @pytest.fixture
@@ -116,6 +117,56 @@ def test_color_out_of_range_rejected():
     assert validate_embed_payload({"title": "t", "color": 0x1000000}) is not None
 
 
+# ─── validate_embeds_payload (array, modo clásico) ───────────────────────────
+
+
+def test_embeds_array_valid():
+    assert validate_embeds_payload([{"title": "a"}, {"title": "b"}]) is None
+
+
+def test_embeds_array_must_be_nonempty_list():
+    assert validate_embeds_payload([]) is not None
+    assert validate_embeds_payload({"title": "t"}) is not None
+    assert validate_embeds_payload(None) is not None
+
+
+def test_embeds_array_max_10():
+    assert validate_embeds_payload([{"title": "t"}] * 10) is None
+    assert validate_embeds_payload([{"title": "t"}] * 11) is not None
+
+
+def test_embeds_array_reports_offending_index():
+    err = validate_embeds_payload([{"title": "ok"}, {"title": "x" * 300}])
+    assert err is not None and "Embed 2" in err
+
+
+def test_embeds_array_converts_each_color():
+    embeds = [{"title": "a", "color": "#8B6EF5"}, {"title": "b", "color": "#000000"}]
+    assert validate_embeds_payload(embeds) is None
+    assert embeds[0]["color"] == 0x8B6EF5
+    assert embeds[1]["color"] == 0
+
+
+# ─── normalize_embeds_json (migración dict suelto -> array) ───────────────────
+
+
+def test_normalize_wraps_legacy_dict():
+    # Formato viejo: un dict suelto guardado antes de soportar múltiples embeds.
+    assert db.normalize_embeds_json('{"title": "viejo"}') == [{"title": "viejo"}]
+
+
+def test_normalize_passes_through_array():
+    assert db.normalize_embeds_json('[{"title": "a"}, {"title": "b"}]') == [
+        {"title": "a"},
+        {"title": "b"},
+    ]
+
+
+def test_normalize_empty_and_none():
+    assert db.normalize_embeds_json(None) == []
+    assert db.normalize_embeds_json("") == []
+
+
 # ─── Plantillas: límite free ─────────────────────────────────────────────────
 
 
@@ -185,7 +236,9 @@ def test_scheduled_announcement_plain_text_branch(memory_db):
     channel.send.assert_awaited_once_with("hola texto")
 
 
-def test_scheduled_announcement_embed_branch(memory_db):
+def test_scheduled_announcement_legacy_dict_embed_branch(memory_db):
+    # Formato viejo (dict suelto, ya deployado): normalize_embeds_json lo
+    # envuelve y el loop lo manda como embeds=[...] igual que el formato nuevo.
     embed_dict = {"title": "anuncio embed", "color": 0x8B6EF5}
     asyncio.run(
         db.add_scheduled_announcement(
@@ -198,8 +251,25 @@ def test_scheduled_announcement_embed_branch(memory_db):
     channel.send.assert_awaited_once()
     kwargs = channel.send.await_args.kwargs
     assert channel.send.await_args.args == ()
-    assert kwargs["embed"].title == "anuncio embed"
-    assert kwargs["embed"].colour.value == 0x8B6EF5
+    embeds = kwargs["embeds"]
+    assert len(embeds) == 1
+    assert embeds[0].title == "anuncio embed"
+    assert embeds[0].colour.value == 0x8B6EF5
+
+
+def test_scheduled_announcement_multi_embed_array_branch(memory_db):
+    # Formato nuevo: array de varios embeds -> channel.send(embeds=[...]).
+    embeds_json = json.dumps([{"title": "uno"}, {"title": "dos"}])
+    asyncio.run(
+        db.add_scheduled_announcement(
+            1, 10, "[embed]", "interval", 1,
+            interval_minutes=30, embed_json=embeds_json,
+        )
+    )
+    channel = _fake_channel()
+    _run_announcement_loop(channel)
+    embeds = channel.send.await_args.kwargs["embeds"]
+    assert [e.title for e in embeds] == ["uno", "dos"]
 
 
 def test_get_due_includes_embed_json(memory_db):
@@ -212,3 +282,134 @@ def test_get_due_includes_embed_json(memory_db):
     due = asyncio.run(db.get_due_scheduled_announcements())
     assert len(due) == 1
     assert due[0]["embed_json"] == '{"title": "x"}'
+    assert due[0]["content_mode"] == "classic_embed"
+
+
+# ─── Layout Components V2: validate_layout_v2_payload ─────────────────────────
+
+VALID_LAYOUT = {
+    "blocks": [
+        {
+            "type": "container",
+            "accent_color": "#8B6EF5",
+            "children": [
+                {"type": "text", "content": "hola **mundo**"},
+                {
+                    "type": "section",
+                    "texts": ["izquierda"],
+                    "accessory": {"type": "thumbnail", "url": "https://x/y.png"},
+                },
+                {"type": "separator", "visible": True, "spacing": "large"},
+                {"type": "media_gallery", "items": [{"url": "https://a/1.png"}]},
+            ],
+        },
+        {"type": "action_row", "buttons": [{"style": "link", "label": "Ir", "url": "https://x"}]},
+    ]
+}
+
+
+def test_layout_valid():
+    assert validate_layout_v2_payload(VALID_LAYOUT) is None
+
+
+def test_layout_must_be_dict_with_blocks():
+    assert validate_layout_v2_payload([]) is not None
+    assert validate_layout_v2_payload({"blocks": []}) is not None
+    assert validate_layout_v2_payload({}) is not None
+
+
+def test_layout_text_total_4000_shared():
+    over = {"blocks": [
+        {"type": "text", "content": "x" * 2001},
+        {"type": "text", "content": "y" * 2000},
+    ]}
+    ok = {"blocks": [
+        {"type": "text", "content": "x" * 2000},
+        {"type": "text", "content": "y" * 2000},
+    ]}
+    assert validate_layout_v2_payload(over) is not None
+    assert validate_layout_v2_payload(ok) is None
+
+
+def test_layout_section_max_3_texts():
+    def section(n):
+        return {"blocks": [{
+            "type": "section",
+            "texts": ["t"] * n,
+            "accessory": {"type": "thumbnail", "url": "u"},
+        }]}
+    assert validate_layout_v2_payload(section(3)) is None
+    assert validate_layout_v2_payload(section(4)) is not None
+
+
+def test_layout_section_requires_accessory():
+    assert validate_layout_v2_payload(
+        {"blocks": [{"type": "section", "texts": ["a"]}]}
+    ) is not None
+
+
+def test_layout_media_gallery_1_to_10():
+    def gallery(n):
+        return {"blocks": [{"type": "media_gallery", "items": [{"url": "u"}] * n}]}
+    assert validate_layout_v2_payload(gallery(0)) is not None
+    assert validate_layout_v2_payload(gallery(10)) is None
+    assert validate_layout_v2_payload(gallery(11)) is not None
+
+
+def test_layout_max_40_components():
+    ok = {"blocks": [{"type": "text", "content": "x"} for _ in range(40)]}
+    over = {"blocks": [{"type": "text", "content": "x"} for _ in range(41)]}
+    assert validate_layout_v2_payload(ok) is None
+    assert validate_layout_v2_payload(over) is not None
+
+
+def test_layout_no_nested_containers():
+    nested = {"blocks": [{"type": "container", "children": [
+        {"type": "container", "children": [{"type": "text", "content": "x"}]}
+    ]}]}
+    assert validate_layout_v2_payload(nested) is not None
+
+
+def test_layout_only_link_buttons_in_phase2():
+    role_btn = {"blocks": [{"type": "action_row", "buttons": [{"style": "role", "label": "x"}]}]}
+    link_btn = {"blocks": [{"type": "action_row", "buttons": [{"style": "link", "label": "Ir", "url": "https://x"}]}]}
+    assert validate_layout_v2_payload(role_btn) is not None
+    assert validate_layout_v2_payload(link_btn) is None
+
+
+def test_build_layout_view_smoke():
+    view = build_layout_view(VALID_LAYOUT)
+    assert view.to_components()
+
+
+# ─── content_mode: round-trip y branch de anuncios ───────────────────────────
+
+
+def test_template_content_mode_roundtrip(memory_db):
+    tid = asyncio.run(
+        db.add_embed_template(1, "lay", '{"blocks": []}', "layout_v2")
+    )
+    assert asyncio.run(db.get_embed_template(tid, 1))["content_mode"] == "layout_v2"
+    assert asyncio.run(db.list_embed_templates(1))[0]["content_mode"] == "layout_v2"
+
+
+def test_template_default_content_mode_is_classic(memory_db):
+    tid = asyncio.run(db.add_embed_template(1, "clasica", '[{"title": "t"}]'))
+    assert asyncio.run(db.get_embed_template(tid, 1))["content_mode"] == "classic_embed"
+
+
+def test_scheduled_announcement_layout_v2_branch(memory_db):
+    layout = {"blocks": [{"type": "text", "content": "layout va"}]}
+    asyncio.run(
+        db.add_scheduled_announcement(
+            1, 10, "[layout]", "interval", 1,
+            interval_minutes=30, embed_json=json.dumps(layout),
+            content_mode="layout_v2",
+        )
+    )
+    channel = _fake_channel()
+    _run_announcement_loop(channel)
+    channel.send.assert_awaited_once()
+    kwargs = channel.send.await_args.kwargs
+    assert isinstance(kwargs.get("view"), discord.ui.LayoutView)
+    assert "embeds" not in kwargs and "embed" not in kwargs

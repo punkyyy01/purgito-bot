@@ -465,19 +465,32 @@ async function loadYouTube() {
 // feedback inmediato sin esperar el 400 del server.
 const EMBED_LIMITS = {
   title: 256, description: 4096, fields: 25, fieldName: 256,
-  fieldValue: 1024, footer: 2048, author: 256, total: 6000,
+  fieldValue: 1024, footer: 2048, author: 256, total: 6000, count: 10,
 };
 
 let _embedTab = 'editor';
-// Estado del editor: persiste al cambiar de sub-vista (así "Cargar en el
-// editor" desde plantillas no se pierde al navegar).
-let _embed = null;
+// Modo de contenido: 'classic' (embeds clásicos) o 'layout' (Components V2).
+// Discord no permite combinar ambos en un mismo mensaje.
+let _embedMode = 'classic';
+// Documento del editor clásico: array de hasta 10 embeds + el embed activo +
+// datos de la plantilla cargada (si aplica). Persiste al cambiar de sub-vista.
+let _embedDoc = null;
+// Documento del editor Layout V2 (bloques). Se mantiene aparte del clásico,
+// así cambiar de modo no destruye el trabajo del otro editor.
+let _layoutDoc = null;
+
+function blankDoc() {
+  return { embeds: [blankEmbed()], active: 0, templateId: null, templateName: '',
+           channelId: '', sendMode: 'now', schedType: 'interval', interval: '60', time: '09:00' };
+}
 
 function blankEmbed() {
   return {
     title: '', description: '', color: '#8B6EF5',
     authorName: '', authorIcon: '', footerText: '', footerIcon: '',
-    thumbnail: '', image: '', fields: [], templateId: null, templateName: '',
+    // `url` no tiene campo visible: lo gestiona el atajo de galería, que agrupa
+    // embeds consecutivos que comparten el mismo `url` (así los muestra Discord).
+    thumbnail: '', image: '', url: '', fields: [],
   };
 }
 
@@ -487,6 +500,7 @@ function embedDict(s) {
   if (s.title.trim()) e.title = s.title.trim();
   if (s.description.trim()) e.description = s.description.trim();
   if (s.color) e.color = s.color; // hex "#RRGGBB"; el backend lo convierte a int
+  if (s.url && s.url.trim()) e.url = s.url.trim();
   if (s.authorName.trim()) {
     e.author = { name: s.authorName.trim() };
     if (s.authorIcon.trim()) e.author.icon_url = s.authorIcon.trim();
@@ -505,12 +519,13 @@ function embedDict(s) {
 }
 
 // Inverso: dict de embed guardado -> estado del formulario.
-function embedToState(e, templateId, templateName) {
+function embedToState(e) {
   const s = blankEmbed();
   s.title = e.title || '';
   s.description = e.description || '';
   if (typeof e.color === 'number') s.color = '#' + e.color.toString(16).padStart(6, '0');
   else if (typeof e.color === 'string') s.color = e.color;
+  s.url = e.url || '';
   s.authorName = (e.author && e.author.name) || '';
   s.authorIcon = (e.author && e.author.icon_url) || '';
   s.footerText = (e.footer && e.footer.text) || '';
@@ -518,9 +533,17 @@ function embedToState(e, templateId, templateName) {
   s.thumbnail = (e.thumbnail && e.thumbnail.url) || '';
   s.image = (e.image && e.image.url) || '';
   s.fields = (e.fields || []).map(f => ({ name: f.name || '', value: f.value || '', inline: !!f.inline }));
-  s.templateId = templateId || null;
-  s.templateName = templateName || '';
   return s;
+}
+
+// Doc a partir de un array de embeds guardados (plantilla).
+function docFromEmbeds(embeds, templateId, templateName) {
+  const doc = blankDoc();
+  doc.embeds = (embeds && embeds.length ? embeds : [{}]).map(embedToState);
+  doc.active = 0;
+  doc.templateId = templateId || null;
+  doc.templateName = templateName || '';
+  return doc;
 }
 
 function validateEmbedClient(e) {
@@ -540,6 +563,50 @@ function validateEmbedClient(e) {
   if (total > EMBED_LIMITS.total) return `El embed supera los ${EMBED_LIMITS.total} caracteres en total.`;
   if (!e.title && !e.description && !fields.length && !e.image && !e.thumbnail && !e.author && !e.footer) {
     return 'El embed está vacío: completa al menos un campo.';
+  }
+  return null;
+}
+
+// Valida el array completo (espejo de validate_embeds_payload en el backend).
+function validateEmbedsClient(dicts) {
+  if (!dicts.length) return 'Agrega al menos un embed con contenido.';
+  if (dicts.length > EMBED_LIMITS.count) return `Máximo ${EMBED_LIMITS.count} embeds por mensaje.`;
+  for (let i = 0; i < dicts.length; i++) {
+    const err = validateEmbedClient(dicts[i]);
+    if (err) return `Embed ${i + 1}: ${err}`;
+  }
+  return null;
+}
+
+// dicts no vacíos del doc (los tabs sin contenido no se envían ni guardan).
+function docDicts(doc) {
+  return doc.embeds.map(embedDict).filter(d => Object.keys(d).length);
+}
+
+// Textarea que crece con su contenido (tope 400px, luego scroll interno).
+function autoGrow(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 400) + 'px';
+}
+
+// Detecta URLs de Tenor/Giphy y devuelve { note, url, warn } o null. Para
+// Giphy normaliza a la URL del archivo directo (Discord no embebe la página);
+// para una página de Tenor no se puede derivar el archivo de forma fiable en
+// el cliente, así que solo se avisa.
+function detectGif(raw) {
+  const url = (raw || '').trim();
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); } catch (e) { return null; }
+  if (host.endsWith('giphy.com')) {
+    const m = url.match(/giphy\.com\/(?:gifs|media)\/(?:.*-)?(\w+)/);
+    if (m && !host.startsWith('media')) {
+      return { note: 'GIF de Giphy detectado — usaremos el archivo optimizado.', url: `https://media.giphy.com/media/${m[1]}/giphy.gif` };
+    }
+    return null;
+  }
+  if (host.endsWith('tenor.com')) {
+    if (host.startsWith('media') || host.startsWith('c.')) return null; // ya es archivo directo
+    return { warn: true, url, note: 'Página de Tenor detectada — para que se vea en el embed pegá el enlace directo del GIF (media.tenor.com/…), no el de la página.' };
   }
   return null;
 }
@@ -584,6 +651,15 @@ function renderEmbedPreview(e) {
     el('div', { class: 'd-embed-bar', style: 'background:' + color }), body);
 }
 
+// Preview de todos los embeds del doc, apilados como los muestra Discord.
+function renderEmbedsPreview(dicts) {
+  const nonEmpty = dicts.filter(d => Object.keys(d).length);
+  if (!nonEmpty.length) return emptyState('El preview aparece aquí a medida que completas el formulario.');
+  const stack = el('div', { class: 'd-embed-stack' });
+  for (const d of nonEmpty) stack.append(renderEmbedPreview(d));
+  return stack;
+}
+
 async function loadEmbeds() {
   const box = content();
   const tabs = el('div', { class: 'embed-tabs' },
@@ -595,6 +671,14 @@ async function loadEmbeds() {
   else await renderEmbedTemplates(view);
 }
 
+function modeRadio(mode, label) {
+  return el('label', { class: 'toggle' },
+    el('input', {
+      type: 'radio', name: 'contentMode', checked: _embedMode === mode,
+      onchange: () => { _embedMode = mode; loadEmbeds(); },
+    }), label);
+}
+
 async function renderEmbedEditor(box) {
   box.append(spinner());
   let channels;
@@ -602,24 +686,61 @@ async function renderEmbedEditor(box) {
   catch (e) { renderError(box, e); return; }
   box.innerHTML = '';
 
-  if (!_embed) _embed = blankEmbed();
-  const s = _embed;
+  // Selector de modo: embeds clásicos vs Layout V2 (excluyentes en Discord).
+  box.append(el('div', { class: 'embed-mode-sel' },
+    modeRadio('classic', 'Embeds clásicos'),
+    modeRadio('layout', 'Layout V2')));
+  const inner = el('div', {});
+  box.append(inner);
+  if (_embedMode === 'layout') renderLayoutEditor(inner, channels);
+  else renderClassicEditor(inner, channels);
+}
+
+function renderClassicEditor(box, channels) {
+  if (!_embedDoc) _embedDoc = blankDoc();
+  const doc = _embedDoc;
+  const s = doc.embeds[doc.active];  // embed activo
 
   const previewBox = el('div', {});
   function updatePreview() {
     previewBox.innerHTML = '';
-    previewBox.append(renderEmbedPreview(embedDict(s)));
+    previewBox.append(renderEmbedsPreview(doc.embeds.map(embedDict)));
   }
 
   function bound(tag, key, attrs) {
     const node = el(tag, { ...attrs, value: s[key] });
-    if (tag === 'textarea') node.value = s[key];
-    node.oninput = () => { s[key] = node.value; updatePreview(); };
+    if (tag === 'textarea') { node.value = s[key]; node.classList.add('autogrow'); }
+    node.oninput = () => {
+      s[key] = node.value;
+      if (tag === 'textarea') autoGrow(node);
+      updatePreview();
+    };
     return node;
   }
 
   function fieldBlock(label, node) {
     return el('div', { class: 'field' }, el('label', {}, label), node);
+  }
+
+  // Input de URL de imagen/thumbnail con aviso de GIF (Tenor/Giphy) debajo.
+  function imageBlock(label, key) {
+    const input = bound('input', key, { type: 'url', placeholder: 'https://…' });
+    const notice = el('div', { class: 'embed-gif-note' });
+    function refresh() {
+      const d = detectGif(input.value);
+      notice.className = 'embed-gif-note' + (d ? (d.warn ? ' warn' : ' ok') : '');
+      notice.textContent = d ? d.note : '';
+    }
+    input.addEventListener('input', refresh);
+    // Al salir del campo, si Giphy tiene una URL directa mejor, la aplicamos.
+    input.addEventListener('change', () => {
+      const d = detectGif(input.value);
+      if (d && !d.warn && d.url !== input.value.trim()) {
+        input.value = d.url; s[key] = d.url; refresh(); updatePreview();
+      }
+    });
+    refresh();
+    return el('div', { class: 'field' }, el('label', {}, label), input, notice);
   }
 
   // --- fields dinámicos ---
@@ -650,19 +771,63 @@ async function renderEmbedEditor(box) {
   }
   renderFields();
 
-  // --- destino y modo de envío ---
-  const chSel = channelSelect(channels, null, 'Canal destino…');
-  const modeNow = el('input', { type: 'radio', name: 'embedMode', checked: true });
-  const modeSched = el('input', { type: 'radio', name: 'embedMode' });
+  // --- barra de embeds (tabs Embed 1..N + agregar + galería) ---
+  const atMax = doc.embeds.length >= EMBED_LIMITS.count;
+  const embedBar = el('div', { class: 'embed-bar-tabs' });
+  doc.embeds.forEach((_, i) => {
+    embedBar.append(el('div', {
+      class: 'embed-pill' + (i === doc.active ? ' active' : ''),
+      onclick: () => { doc.active = i; loadEmbeds(); },
+    },
+      'Embed ' + (i + 1),
+      doc.embeds.length > 1 ? el('span', {
+        class: 'embed-pill-x',
+        onclick: (ev) => {
+          ev.stopPropagation();
+          doc.embeds.splice(i, 1);
+          if (doc.active >= doc.embeds.length) doc.active = doc.embeds.length - 1;
+          loadEmbeds();
+        },
+      }, '✗') : null));
+  });
+  embedBar.append(el('button', {
+    class: 'btn btn-secondary btn-sm', disabled: atMax || null,
+    onclick: () => { doc.embeds.push(blankEmbed()); doc.active = doc.embeds.length - 1; loadEmbeds(); },
+  }, '+ Agregar embed'));
+  embedBar.append(el('button', {
+    class: 'btn btn-secondary btn-sm', disabled: atMax || null,
+    title: 'Agrupa varias imágenes en una galería compartiendo el enlace del embed actual',
+    onclick: () => {
+      if (!s.image.trim()) { toast('Agrega primero una imagen a este embed', 'warn'); return; }
+      // Discord agrupa en galería los embeds que comparten el mismo `url`;
+      // usamos la imagen del embed activo como enlace compartido.
+      const shared = s.url.trim() || s.image.trim();
+      s.url = shared;
+      const extra = blankEmbed();
+      extra.url = shared;
+      doc.embeds.push(extra);
+      doc.active = doc.embeds.length - 1;
+      loadEmbeds();
+    },
+  }, '+ Galería'));
+
+  // --- destino y modo de envío (persistidos en el doc) ---
+  const chSel = channelSelect(channels, doc.channelId, 'Canal destino…');
+  chSel.onchange = () => { doc.channelId = chSel.value; };
+  const modeNow = el('input', { type: 'radio', name: 'embedMode', checked: doc.sendMode === 'now' });
+  const modeSched = el('input', { type: 'radio', name: 'embedMode', checked: doc.sendMode === 'sched' });
   const schedType = el('select', {},
     el('option', { value: 'interval' }, 'Por intervalo'),
     el('option', { value: 'daily' }, 'A hora fija'));
-  const intervalInput = el('input', { type: 'number', min: '5', max: '1440', value: '60', style: 'width:110px' });
-  const timeInput = el('input', { type: 'time', value: '09:00' });
-  const schedControls = el('div', { class: 'add-row', style: 'display:none;margin-top:8px' },
+  schedType.value = doc.schedType;
+  const intervalInput = el('input', { type: 'number', min: '5', max: '1440', value: doc.interval, style: 'width:110px' });
+  const timeInput = el('input', { type: 'time', value: doc.time });
+  const schedControls = el('div', { class: 'add-row', style: 'margin-top:8px' },
     schedType, intervalInput, timeInput);
 
   function syncSched() {
+    doc.sendMode = modeSched.checked ? 'sched' : 'now';
+    doc.schedType = schedType.value;
     schedControls.style.display = modeSched.checked ? '' : 'none';
     const daily = schedType.value === 'daily';
     intervalInput.style.display = daily ? 'none' : '';
@@ -670,17 +835,19 @@ async function renderEmbedEditor(box) {
     sendBtn.textContent = modeSched.checked ? 'Programar' : 'Enviar ahora';
   }
   modeNow.onchange = modeSched.onchange = schedType.onchange = syncSched;
+  intervalInput.oninput = () => { doc.interval = intervalInput.value; };
+  timeInput.oninput = () => { doc.time = timeInput.value; };
 
   const sendBtn = el('button', {
     class: 'btn btn-primary',
     onclick: async () => {
-      const e = embedDict(s);
-      const err = validateEmbedClient(e);
+      const dicts = docDicts(doc);
+      const err = validateEmbedsClient(dicts);
       if (err) { toast(err, 'err'); return; }
       if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
       try {
         if (modeSched.checked) {
-          const body = { channel_id: chSel.value, embed: e, mode: schedType.value };
+          const body = { channel_id: chSel.value, embeds: dicts, mode: schedType.value };
           if (schedType.value === 'interval') {
             body.interval_minutes = parseInt(intervalInput.value, 10);
           } else {
@@ -690,8 +857,8 @@ async function renderEmbedEditor(box) {
           await apiFetch(`/api/server/${GUILD_ID}/embeds/schedule`, { method: 'POST', body });
           toast('Embed programado', 'ok');
         } else {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embed: e } });
-          toast('Embed enviado', 'ok');
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embeds: dicts } });
+          toast(dicts.length > 1 ? `${dicts.length} embeds enviados` : 'Embed enviado', 'ok');
         }
       } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
     },
@@ -700,31 +867,32 @@ async function renderEmbedEditor(box) {
   const saveBtn = el('button', {
     class: 'btn btn-secondary',
     onclick: async () => {
-      const e = embedDict(s);
-      const err = validateEmbedClient(e);
+      const dicts = docDicts(doc);
+      const err = validateEmbedsClient(dicts);
       if (err) { toast(err, 'err'); return; }
-      const name = (prompt('Nombre de la plantilla:', s.templateName || '') || '').trim();
+      const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
       if (!name) return;
       try {
-        if (s.templateId) {
-          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${s.templateId}`, { method: 'PUT', body: { name, embed: e } });
+        if (doc.templateId) {
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body: { name, embeds: dicts } });
           toast('Plantilla actualizada', 'ok');
         } else {
-          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, embed: e } });
-          s.templateId = resp.id;
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, embeds: dicts } });
+          doc.templateId = resp.id;
           toast('Plantilla guardada', 'ok');
         }
-        s.templateName = name;
+        doc.templateName = name;
       } catch (err2) { toast(err2.message, err2.status === 409 ? 'warn' : 'err'); }
     },
   }, 'Guardar como plantilla');
 
   const clearBtn = el('button', {
     class: 'btn btn-secondary',
-    onclick: () => { _embed = blankEmbed(); loadEmbeds(); },
+    onclick: () => { _embedDoc = blankDoc(); loadEmbeds(); },
   }, 'Limpiar');
 
   const form = el('div', { class: 'embed-form' },
+    embedBar,
     fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
     fieldBlock('Descripción', bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) })),
     fieldBlock('Color', bound('input', 'color', { type: 'color' })),
@@ -735,8 +903,8 @@ async function renderEmbedEditor(box) {
       fieldBlock('Footer', bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) })),
       fieldBlock('URL del ícono del footer', bound('input', 'footerIcon', { type: 'url', placeholder: 'https://…' }))),
     el('div', { class: 'embed-two' },
-      fieldBlock('Thumbnail (URL)', bound('input', 'thumbnail', { type: 'url', placeholder: 'https://…' })),
-      fieldBlock('Imagen grande (URL)', bound('input', 'image', { type: 'url', placeholder: 'https://…' }))),
+      imageBlock('Thumbnail (URL)', 'thumbnail'),
+      imageBlock('Imagen grande (URL)', 'image')),
     el('div', { class: 'field' }, el('label', {}, 'Fields'), fieldsBox, addFieldBtn),
     el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
     el('div', { class: 'field' },
@@ -748,8 +916,357 @@ async function renderEmbedEditor(box) {
   box.append(el('div', { class: 'embed-layout' },
     form,
     el('div', { class: 'd-embed-wrap' }, el('p', { class: 'dim', style: 'margin-top:0' }, 'Preview'), previewBox)));
+  box.querySelectorAll('.autogrow').forEach(autoGrow);
   updatePreview();
   syncSched();
+}
+
+// ---------- Editor Layout V2 (Components V2) ----------
+
+const BLOCK_LABELS = {
+  text: 'Texto', section: 'Sección', media_gallery: 'Galería',
+  separator: 'Separador', action_row: 'Botones', container: 'Container',
+};
+
+function blankLayoutDoc() {
+  return { blocks: [], channelId: '', sendMode: 'now', schedType: 'interval',
+           interval: '60', time: '09:00', templateId: null, templateName: '' };
+}
+
+function newBlock(type) {
+  if (type === 'text') return { type: 'text', content: '' };
+  if (type === 'section') return { type: 'section', texts: [''], accessory: { type: 'thumbnail', url: '', description: '', label: '' } };
+  if (type === 'media_gallery') return { type: 'media_gallery', items: [{ url: '', description: '' }] };
+  if (type === 'separator') return { type: 'separator', visible: true, spacing: 'small' };
+  if (type === 'action_row') return { type: 'action_row', buttons: [{ style: 'link', label: '', url: '' }] };
+  return { type: 'container', accent: true, accent_color: '#8B6EF5', children: [] };
+}
+
+function colorToHex(c) {
+  if (typeof c === 'number') return '#' + c.toString(16).padStart(6, '0');
+  return typeof c === 'string' ? c : null;
+}
+
+// Estado del editor -> dict de bloque estilo API (lo que valida/construye el backend).
+function blockToApi(b) {
+  if (b.type === 'container') {
+    return { type: 'container', accent_color: b.accent ? b.accent_color : null, children: b.children.map(blockToApi) };
+  }
+  if (b.type === 'text') return { type: 'text', content: b.content };
+  if (b.type === 'section') {
+    const acc = b.accessory.type === 'thumbnail'
+      ? { type: 'thumbnail', url: b.accessory.url, description: b.accessory.description }
+      : { type: 'button', style: 'link', label: b.accessory.label, url: b.accessory.url };
+    return { type: 'section', texts: b.texts.slice(), accessory: acc };
+  }
+  if (b.type === 'media_gallery') return { type: 'media_gallery', items: b.items.map(it => ({ url: it.url, description: it.description })) };
+  if (b.type === 'separator') return { type: 'separator', visible: b.visible, spacing: b.spacing };
+  return { type: 'action_row', buttons: b.buttons.map(bt => ({ style: 'link', label: bt.label, url: bt.url })) };
+}
+
+// Inverso: dict de bloque guardado -> estado del editor.
+function apiToBlock(b) {
+  if (b.type === 'container') return { type: 'container', accent: b.accent_color != null, accent_color: colorToHex(b.accent_color) || '#8B6EF5', children: (b.children || []).map(apiToBlock) };
+  if (b.type === 'section') {
+    const a = b.accessory || {};
+    return { type: 'section', texts: (b.texts || ['']).slice(), accessory: { type: a.type === 'button' ? 'button' : 'thumbnail', url: a.url || '', description: a.description || '', label: a.label || '' } };
+  }
+  if (b.type === 'media_gallery') return { type: 'media_gallery', items: (b.items || []).map(it => ({ url: it.url || '', description: it.description || '' })) };
+  if (b.type === 'separator') return { type: 'separator', visible: b.visible !== false, spacing: b.spacing || 'small' };
+  if (b.type === 'action_row') return { type: 'action_row', buttons: (b.buttons || []).map(bt => ({ style: 'link', label: bt.label || '', url: bt.url || '' })) };
+  return { type: 'text', content: b.content || '' };
+}
+
+function docFromLayout(layout, templateId, templateName) {
+  const doc = blankLayoutDoc();
+  doc.blocks = (layout.blocks || []).map(apiToBlock);
+  doc.templateId = templateId || null;
+  doc.templateName = templateName || '';
+  return doc;
+}
+
+// Lista editable de bloques (recursiva: un container tiene su propia lista).
+function renderBlocks(listEl, blocks, inContainer, onChange) {
+  listEl.innerHTML = '';
+  blocks.forEach((_, i) => listEl.append(renderBlockCard(listEl, blocks, i, inContainer, onChange)));
+  const adder = el('div', { class: 'add-row layout-adder' });
+  const types = [['text', '+ Texto'], ['section', '+ Sección'], ['media_gallery', '+ Galería'],
+                 ['separator', '+ Separador'], ['action_row', '+ Botones']];
+  if (!inContainer) types.push(['container', '+ Container']);
+  for (const [t, label] of types) {
+    adder.append(el('button', {
+      class: 'btn btn-secondary btn-sm',
+      onclick: () => { blocks.push(newBlock(t)); renderBlocks(listEl, blocks, inContainer, onChange); onChange(); },
+    }, label));
+  }
+  listEl.append(adder);
+}
+
+function renderBlockCard(listEl, blocks, i, inContainer, onChange) {
+  const b = blocks[i];
+  function rerender() { renderBlocks(listEl, blocks, inContainer, onChange); onChange(); }
+  const head = el('div', { class: 'layout-block-head' },
+    el('span', { class: 'layout-block-type' }, BLOCK_LABELS[b.type]),
+    el('span', { class: 'layout-block-actions' },
+      el('button', { class: 'btn btn-secondary btn-sm', disabled: i === 0 || null, onclick: () => { [blocks[i - 1], blocks[i]] = [blocks[i], blocks[i - 1]]; rerender(); } }, '↑'),
+      el('button', { class: 'btn btn-secondary btn-sm', disabled: i === blocks.length - 1 || null, onclick: () => { [blocks[i + 1], blocks[i]] = [blocks[i], blocks[i + 1]]; rerender(); } }, '↓'),
+      el('button', { class: 'btn btn-danger btn-sm', onclick: () => { blocks.splice(i, 1); rerender(); } }, '✗')));
+  return el('div', { class: 'layout-block' }, head,
+    el('div', { class: 'layout-block-body' }, renderBlockForm(b, onChange)));
+}
+
+function renderBlockForm(b, onChange) {
+  if (b.type === 'text') {
+    const ta = el('textarea', { class: 'autogrow', placeholder: 'Texto (markdown de Discord)' });
+    ta.value = b.content;
+    ta.oninput = () => { b.content = ta.value; autoGrow(ta); onChange(); };
+    return ta;
+  }
+  if (b.type === 'separator') {
+    const vis = el('input', { type: 'checkbox', checked: b.visible });
+    vis.onchange = () => { b.visible = vis.checked; onChange(); };
+    const sp = el('select', {}, el('option', { value: 'small' }, 'Espacio chico'), el('option', { value: 'large' }, 'Espacio grande'));
+    sp.value = b.spacing;
+    sp.onchange = () => { b.spacing = sp.value; onChange(); };
+    return el('div', { class: 'add-row' }, el('label', { class: 'toggle' }, vis, 'Línea visible'), sp);
+  }
+  if (b.type === 'media_gallery') {
+    const box = el('div', {});
+    function renderItems() {
+      box.innerHTML = '';
+      b.items.forEach((it, idx) => {
+        const url = el('input', { type: 'url', placeholder: 'URL de imagen', value: it.url });
+        url.oninput = () => { it.url = url.value; onChange(); };
+        const desc = el('input', { type: 'text', placeholder: 'Descripción (opcional)', value: it.description });
+        desc.oninput = () => { it.description = desc.value; onChange(); };
+        box.append(el('div', { class: 'add-row' }, url, desc,
+          b.items.length > 1 ? el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.items.splice(idx, 1); renderItems(); onChange(); } }, '✗') : null));
+      });
+      box.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.items.length >= 10 || null, onclick: () => { b.items.push({ url: '', description: '' }); renderItems(); onChange(); } }, '+ Imagen'));
+    }
+    renderItems();
+    return box;
+  }
+  if (b.type === 'action_row') {
+    const box = el('div', {});
+    function renderBtns() {
+      box.innerHTML = '';
+      b.buttons.forEach((bt, idx) => {
+        const label = el('input', { type: 'text', placeholder: 'Texto del botón', value: bt.label });
+        label.oninput = () => { bt.label = label.value; onChange(); };
+        const url = el('input', { type: 'url', placeholder: 'https://…', value: bt.url });
+        url.oninput = () => { bt.url = url.value; onChange(); };
+        box.append(el('div', { class: 'add-row' }, el('span', { class: 'dim' }, '🔗'), label, url,
+          el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.buttons.splice(idx, 1); renderBtns(); onChange(); } }, '✗')));
+      });
+      box.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.buttons.length >= 5 || null, onclick: () => { b.buttons.push({ style: 'link', label: '', url: '' }); renderBtns(); onChange(); } }, '+ Botón enlace'));
+    }
+    renderBtns();
+    return box;
+  }
+  if (b.type === 'section') {
+    const box = el('div', {});
+    const textsBox = el('div', {});
+    function renderTexts() {
+      textsBox.innerHTML = '';
+      b.texts.forEach((tx, idx) => {
+        const inp = el('input', { type: 'text', placeholder: 'Texto ' + (idx + 1), value: tx });
+        inp.oninput = () => { b.texts[idx] = inp.value; onChange(); };
+        textsBox.append(el('div', { class: 'add-row' }, inp,
+          b.texts.length > 1 ? el('button', { class: 'btn btn-danger btn-sm', onclick: () => { b.texts.splice(idx, 1); renderTexts(); onChange(); } }, '✗') : null));
+      });
+      textsBox.append(el('button', { class: 'btn btn-secondary btn-sm', disabled: b.texts.length >= 3 || null, onclick: () => { b.texts.push(''); renderTexts(); onChange(); } }, '+ Texto'));
+    }
+    renderTexts();
+    const accType = el('select', {}, el('option', { value: 'thumbnail' }, 'Miniatura'), el('option', { value: 'button' }, 'Botón (enlace)'));
+    accType.value = b.accessory.type;
+    const accBox = el('div', {});
+    function renderAcc() {
+      accBox.innerHTML = '';
+      if (b.accessory.type === 'thumbnail') {
+        const url = el('input', { type: 'url', placeholder: 'URL de miniatura', value: b.accessory.url });
+        url.oninput = () => { b.accessory.url = url.value; onChange(); };
+        const desc = el('input', { type: 'text', placeholder: 'Descripción (opcional)', value: b.accessory.description });
+        desc.oninput = () => { b.accessory.description = desc.value; onChange(); };
+        accBox.append(el('div', { class: 'add-row' }, url, desc));
+      } else {
+        const label = el('input', { type: 'text', placeholder: 'Texto del botón', value: b.accessory.label });
+        label.oninput = () => { b.accessory.label = label.value; onChange(); };
+        const url = el('input', { type: 'url', placeholder: 'https://…', value: b.accessory.url });
+        url.oninput = () => { b.accessory.url = url.value; onChange(); };
+        accBox.append(el('div', { class: 'add-row' }, label, url));
+      }
+    }
+    accType.onchange = () => { b.accessory.type = accType.value; renderAcc(); onChange(); };
+    renderAcc();
+    return el('div', {},
+      el('div', { class: 'field' }, el('label', {}, 'Textos (máx 3)'), textsBox),
+      el('div', { class: 'field' }, el('label', {}, 'Accesorio'), accType, accBox));
+  }
+  // container
+  const box = el('div', {});
+  const accentChk = el('input', { type: 'checkbox', checked: b.accent });
+  accentChk.onchange = () => { b.accent = accentChk.checked; onChange(); };
+  const colorInp = el('input', { type: 'color', value: b.accent_color });
+  colorInp.oninput = () => { b.accent_color = colorInp.value; onChange(); };
+  box.append(el('div', { class: 'add-row' }, el('label', { class: 'toggle' }, accentChk, 'Barra de color'), colorInp));
+  const nested = el('div', { class: 'layout-nested' });
+  renderBlocks(nested, b.children, true, onChange);
+  box.append(nested);
+  return box;
+}
+
+// Preview anidado de un layout (bloques ya en formato API).
+function renderLayoutPreview(blocks) {
+  if (!blocks.length) return emptyState('Agrega bloques para ver el preview.');
+  const wrap = el('div', { class: 'lv2-preview' });
+  for (const b of blocks) wrap.append(renderPreviewBlock(b));
+  return wrap;
+}
+
+function renderPreviewBlock(b) {
+  if (b.type === 'container') {
+    const inner = el('div', { class: 'lv2-container-inner' });
+    for (const c of b.children) inner.append(renderPreviewBlock(c));
+    const cont = el('div', { class: 'lv2-container' }, inner);
+    if (b.accent_color != null) cont.style.borderLeft = '4px solid ' + (colorToHex(b.accent_color) || '#8B6EF5');
+    return cont;
+  }
+  if (b.type === 'text') return el('div', { class: 'lv2-text' }, b.content || '');
+  if (b.type === 'section') {
+    const texts = el('div', { class: 'lv2-section-texts' }, b.texts.map(t => el('div', { class: 'lv2-text' }, t)));
+    let acc;
+    if (b.accessory.type === 'thumbnail') acc = b.accessory.url ? embedImg({ src: b.accessory.url, alt: '', class: 'lv2-thumb' }) : null;
+    else acc = el('span', { class: 'lv2-btn' }, b.accessory.label || 'botón');
+    return el('div', { class: 'lv2-section' }, texts, el('div', { class: 'lv2-accessory' }, acc));
+  }
+  if (b.type === 'media_gallery') {
+    const grid = el('div', { class: 'lv2-gallery' });
+    for (const it of b.items) if (it.url) grid.append(embedImg({ src: it.url, alt: it.description || '' }));
+    return grid;
+  }
+  if (b.type === 'separator') return el('div', { class: 'lv2-sep' + (b.visible ? ' visible' : '') });
+  if (b.type === 'action_row') return el('div', { class: 'lv2-row' }, b.buttons.map(bt => el('span', { class: 'lv2-btn' }, bt.label || 'botón')));
+  return el('div', {});
+}
+
+function renderLayoutEditor(box, channels) {
+  if (!_layoutDoc) _layoutDoc = blankLayoutDoc();
+  const doc = _layoutDoc;
+
+  box.append(el('div', { class: 'embed-warn' },
+    'Los layouts V2 no pueden combinar con embeds clásicos en el mismo mensaje — es una limitación de Discord, no del panel.'));
+
+  const previewBox = el('div', {});
+  function updatePreview() {
+    previewBox.innerHTML = '';
+    previewBox.append(renderLayoutPreview(doc.blocks.map(blockToApi)));
+  }
+
+  const blocksList = el('div', { class: 'layout-list' });
+  renderBlocks(blocksList, doc.blocks, false, updatePreview);
+
+  // destino + modo de envío (persistidos en el doc), misma UX que el clásico.
+  const chSel = channelSelect(channels, doc.channelId, 'Canal destino…');
+  chSel.onchange = () => { doc.channelId = chSel.value; };
+  const modeNow = el('input', { type: 'radio', name: 'lvMode', checked: doc.sendMode === 'now' });
+  const modeSched = el('input', { type: 'radio', name: 'lvMode', checked: doc.sendMode === 'sched' });
+  const schedType = el('select', {}, el('option', { value: 'interval' }, 'Por intervalo'), el('option', { value: 'daily' }, 'A hora fija'));
+  schedType.value = doc.schedType;
+  const intervalInput = el('input', { type: 'number', min: '5', max: '1440', value: doc.interval, style: 'width:110px' });
+  const timeInput = el('input', { type: 'time', value: doc.time });
+  const schedControls = el('div', { class: 'add-row', style: 'margin-top:8px' }, schedType, intervalInput, timeInput);
+
+  function syncSched() {
+    doc.sendMode = modeSched.checked ? 'sched' : 'now';
+    doc.schedType = schedType.value;
+    schedControls.style.display = modeSched.checked ? '' : 'none';
+    const daily = schedType.value === 'daily';
+    intervalInput.style.display = daily ? 'none' : '';
+    timeInput.style.display = daily ? '' : 'none';
+    sendBtn.textContent = modeSched.checked ? 'Programar' : 'Enviar ahora';
+  }
+  modeNow.onchange = modeSched.onchange = schedType.onchange = syncSched;
+  intervalInput.oninput = () => { doc.interval = intervalInput.value; };
+  timeInput.oninput = () => { doc.time = timeInput.value; };
+
+  const sendBtn = el('button', {
+    class: 'btn btn-primary',
+    onclick: async () => {
+      if (!doc.blocks.length) { toast('Agrega al menos un bloque', 'err'); return; }
+      if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
+      const layout = { blocks: doc.blocks.map(blockToApi) };
+      try {
+        if (modeSched.checked) {
+          const body = { channel_id: chSel.value, content_mode: 'layout_v2', layout, mode: schedType.value };
+          if (schedType.value === 'interval') body.interval_minutes = parseInt(intervalInput.value, 10);
+          else { const [h, m] = timeInput.value.split(':'); body.hour = parseInt(h, 10); body.minute = parseInt(m, 10); }
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/schedule`, { method: 'POST', body });
+          toast('Layout programado', 'ok');
+        } else {
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, content_mode: 'layout_v2', layout } });
+          toast('Layout enviado', 'ok');
+        }
+      } catch (e) { toast(e.message, e.status === 429 ? 'warn' : 'err'); }
+    },
+  }, 'Enviar ahora');
+
+  const saveBtn = el('button', {
+    class: 'btn btn-secondary',
+    onclick: async () => {
+      if (!doc.blocks.length) { toast('Agrega al menos un bloque', 'err'); return; }
+      const layout = { blocks: doc.blocks.map(blockToApi) };
+      const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
+      if (!name) return;
+      try {
+        if (doc.templateId) {
+          await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${doc.templateId}`, { method: 'PUT', body: { name, content_mode: 'layout_v2', layout } });
+          toast('Plantilla actualizada', 'ok');
+        } else {
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/templates`, { method: 'POST', body: { name, content_mode: 'layout_v2', layout } });
+          doc.templateId = resp.id;
+          toast('Plantilla guardada', 'ok');
+        }
+        doc.templateName = name;
+      } catch (e) { toast(e.message, e.status === 409 ? 'warn' : 'err'); }
+    },
+  }, 'Guardar como plantilla');
+
+  const clearBtn = el('button', { class: 'btn btn-secondary', onclick: () => { _layoutDoc = blankLayoutDoc(); loadEmbeds(); } }, 'Limpiar');
+
+  const form = el('div', { class: 'embed-form' },
+    el('div', { class: 'field' }, el('label', {}, 'Bloques'), blocksList),
+    el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
+    el('div', { class: 'field' },
+      el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
+      el('label', { class: 'toggle' }, modeSched, 'Programar'),
+      schedControls),
+    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn));
+
+  box.append(el('div', { class: 'embed-layout' },
+    form,
+    el('div', { class: 'd-embed-wrap' }, el('p', { class: 'dim', style: 'margin-top:0' }, 'Preview'), previewBox)));
+  box.querySelectorAll('.autogrow').forEach(autoGrow);
+  updatePreview();
+  syncSched();
+}
+
+// Snippet de texto legible del primer embed no vacío de una plantilla.
+function templateSnippet(embeds) {
+  const e = embeds.find(x => x && Object.keys(x).length) || {};
+  return e.title || e.description || (e.fields && e.fields[0] && e.fields[0].name) || '(sin texto)';
+}
+
+// Snippet del primer bloque con texto de un layout V2 (para "Mis plantillas").
+function layoutSnippet(layout) {
+  function text(b) {
+    if (b.type === 'text') return (b.content || '').trim();
+    if (b.type === 'section') return (b.texts || []).find(t => t && t.trim()) || '';
+    if (b.type === 'container') { for (const c of b.children || []) { const s = text(c); if (s) return s; } }
+    return '';
+  }
+  for (const b of (layout && layout.blocks) || []) { const s = text(b); if (s) return s; }
+  return '(layout sin texto)';
 }
 
 async function renderEmbedTemplates(box) {
@@ -769,18 +1286,33 @@ async function renderEmbedTemplates(box) {
 
   const list = el('ul', { class: 'item-list' });
   for (const t of data.templates) {
-    const e = t.embed;
-    const color = typeof e.color === 'number' ? '#' + e.color.toString(16).padStart(6, '0')
-      : (typeof e.color === 'string' ? e.color : '#8B6EF5');
-    const snippet = e.title || e.description || (e.fields && e.fields[0] && e.fields[0].name) || '(sin texto)';
+    const isLayout = t.content_mode === 'layout_v2';
+    const embeds = t.embeds || [];
+    const first = embeds.find(x => x && Object.keys(x).length) || {};
+    const color = typeof first.color === 'number' ? '#' + first.color.toString(16).padStart(6, '0')
+      : (typeof first.color === 'string' ? first.color : '#8B6EF5');
+    const badge = isLayout
+      ? el('span', { class: 'badge badge-premium' }, 'LAYOUT')
+      : (embeds.length > 1 ? el('span', { class: 'badge' }, embeds.length + ' embeds') : null);
+    const snippet = isLayout ? layoutSnippet(t.layout) : templateSnippet(embeds);
+    // Payload que reusa el "Renombrar" (PUT exige revalidar todo el contenido).
+    const renameBody = (name) => isLayout
+      ? { name, content_mode: 'layout_v2', layout: t.layout }
+      : { name, embeds };
     list.append(el('li', {},
       el('span', {},
         el('span', { class: 'tpl-dot', style: 'background:' + color }), ' ',
-        el('strong', {}, t.name), ' — ',
+        el('strong', {}, t.name),
+        badge,
+        ' — ',
         el('span', { class: 'dim' }, snippet.slice(0, 60))),
       el('button', {
         class: 'btn btn-secondary btn-sm',
-        onclick: () => { _embed = embedToState(e, t.id, t.name); _embedTab = 'editor'; loadEmbeds(); },
+        onclick: () => {
+          if (isLayout) { _embedMode = 'layout'; _layoutDoc = docFromLayout(t.layout, t.id, t.name); }
+          else { _embedMode = 'classic'; _embedDoc = docFromEmbeds(embeds, t.id, t.name); }
+          _embedTab = 'editor'; loadEmbeds();
+        },
       }, 'Cargar en el editor'),
       el('button', {
         class: 'btn btn-secondary btn-sm',
@@ -788,7 +1320,7 @@ async function renderEmbedTemplates(box) {
           const name = (prompt('Nuevo nombre:', t.name) || '').trim();
           if (!name || name === t.name) return;
           try {
-            await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${t.id}`, { method: 'PUT', body: { name, embed: e } });
+            await apiFetch(`/api/server/${GUILD_ID}/embeds/templates/${t.id}`, { method: 'PUT', body: renameBody(name) });
             loadEmbeds();
           } catch (err) { toast(err.message, 'err'); }
         },

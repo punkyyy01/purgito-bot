@@ -55,6 +55,14 @@ def _env_int_or_none(name: str) -> int | None:
     return value or None
 
 
+def _env_compact(name: str) -> str:
+    """Devuelve el valor sin espacios ni saltos.
+
+    Útil para tokens/UUIDs copiados desde paneles que a veces meten espacios o
+    saltos al pegarse en un .env."""
+    return "".join((os.getenv(name) or "").split())
+
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 ENABLE_MESSAGE_CONTENT = os.getenv(
     "ENABLE_MESSAGE_CONTENT", "true"
@@ -109,11 +117,11 @@ LANDING_ORIGINS = frozenset(
 )
 
 # --- Polar.sh (compra de premium) ---
-POLAR_ACCESS_TOKEN = os.getenv("POLAR_ACCESS_TOKEN", "")
-POLAR_WEBHOOK_SECRET = os.getenv("POLAR_WEBHOOK_SECRET", "")
+POLAR_ACCESS_TOKEN = _env_compact("POLAR_ACCESS_TOKEN")
+POLAR_WEBHOOK_SECRET = _env_compact("POLAR_WEBHOOK_SECRET")
 POLAR_SERVER = os.getenv("POLAR_SERVER", "sandbox").strip().lower() or "sandbox"
-POLAR_PRODUCT_ID_MONTHLY = os.getenv("POLAR_PRODUCT_ID_MONTHLY", "")
-POLAR_PRODUCT_ID_ANNUAL = os.getenv("POLAR_PRODUCT_ID_ANNUAL", "")
+POLAR_PRODUCT_ID_MONTHLY = _env_compact("POLAR_PRODUCT_ID_MONTHLY")
+POLAR_PRODUCT_ID_ANNUAL = _env_compact("POLAR_PRODUCT_ID_ANNUAL")
 
 
 def get_invite_url(guild_id: str) -> str:

@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -126,7 +127,8 @@ CREATE TABLE IF NOT EXISTS scheduled_announcements (
     last_sent_at TEXT,
     created_by INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    embed_json TEXT DEFAULT NULL
+    embed_json TEXT DEFAULT NULL,
+    content_mode TEXT NOT NULL DEFAULT 'classic_embed'
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_announcements_guild ON scheduled_announcements(guild_id);
 
@@ -135,6 +137,7 @@ CREATE TABLE IF NOT EXISTS embed_templates (
     guild_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     embed_json TEXT NOT NULL,
+    content_mode TEXT NOT NULL DEFAULT 'classic_embed',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -247,6 +250,17 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna embed_json ya existe en scheduled_announcements")
+    # content_mode: distingue embeds clásicos de layouts Components V2. Al hacer
+    # ADD COLUMN con DEFAULT, SQLite rellena las filas viejas con el default, así
+    # que todo lo ya guardado queda como 'classic_embed' sin backfill manual.
+    for _table in ("embed_templates", "scheduled_announcements"):
+        try:
+            await _db.execute(
+                f"ALTER TABLE {_table} ADD COLUMN content_mode TEXT NOT NULL DEFAULT 'classic_embed'"
+            )
+            await _db.commit()
+        except Exception:
+            log.debug("Columna content_mode ya existe en %s", _table)
     await _db.commit()
     flag_path = os.path.join(DATA_DIR, ".images_wiped_v2")
     if not os.path.exists(flag_path):
@@ -901,14 +915,15 @@ async def add_scheduled_announcement(
     hour: int | None = None,
     minute: int | None = None,
     embed_json: str | None = None,
+    content_mode: str = "classic_embed",
 ) -> int | None:
     """Crea un anuncio programado. Devuelve el id insertado, o None si el guild
     ya llegó al límite de anuncios (a diferencia de gifs/imágenes, acá no se
     evictan anuncios viejos: el admin tiene que borrar uno a mano primero).
 
     embed_json None = anuncio de texto plano (comportamiento clásico); con
-    contenido, el loop de anuncios envía discord.Embed.from_dict en vez del
-    texto de `message`."""
+    contenido, el loop de anuncios envía embeds o un layout Components V2 según
+    content_mode ('classic_embed' | 'layout_v2') en vez del texto de `message`."""
     max_announcements = _limit_for_guild(
         guild_id,
         "MAX_ANNOUNCEMENTS_PER_GUILD_FREE",
@@ -927,8 +942,8 @@ async def add_scheduled_announcement(
             return None
         cursor = await db.execute(
             "INSERT INTO scheduled_announcements "
-            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by, embed_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by, embed_json, content_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 guild_id,
                 channel_id,
@@ -939,6 +954,7 @@ async def add_scheduled_announcement(
                 minute,
                 created_by,
                 embed_json,
+                content_mode,
             ),
         )
         await db.commit()
@@ -961,7 +977,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
         "SELECT id, channel_id, message, mode, interval_minutes, hour, minute, "
-        "last_sent_at, created_by, created_at, embed_json "
+        "last_sent_at, created_by, created_at, embed_json, content_mode "
         "FROM scheduled_announcements WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
@@ -979,6 +995,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
             "created_by": r[8],
             "created_at": r[9],
             "embed_json": r[10],
+            "content_mode": r[11],
         }
         for r in rows
     ]
@@ -990,7 +1007,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
     porque hay que comparar hora:minuto y la FECHA local (no solo un delta)."""
     db = await get_db()
     async with db.execute(
-        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at, embed_json "
+        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at, embed_json, content_mode "
         "FROM scheduled_announcements "
         "WHERE (mode='interval' AND (last_sent_at IS NULL "
         "       OR datetime(last_sent_at, '+' || interval_minutes || ' minutes') <= datetime('now'))) "
@@ -1012,6 +1029,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
             "minute": r[7],
             "last_sent_at": r[8],
             "embed_json": r[9],
+            "content_mode": r[10],
         }
         if item["mode"] == "interval":
             due.append(item)
@@ -1033,6 +1051,23 @@ async def get_due_scheduled_announcements() -> list[dict]:
 # ─── Plantillas de embeds ────────────────────────────────────────────────────
 
 
+def normalize_embeds_json(raw: str | None) -> list[dict]:
+    """Parsea embed_json a una lista de dicts de embed.
+
+    Compat hacia atrás: las filas guardadas antes de soportar múltiples
+    embeds tienen un dict suelto en vez de un array. Se envuelve en una lista
+    de un elemento al leer, sin reescribir la fila en DB — así el mismo código
+    de envío maneja formato viejo y nuevo sin ramas."""
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
 def embed_template_limit(guild_id: int | None) -> int:
     """Máximo de plantillas de embed guardables según plan del guild."""
     return _limit_for_guild(
@@ -1044,10 +1079,13 @@ def embed_template_limit(guild_id: int | None) -> int:
     )
 
 
-async def add_embed_template(guild_id: int, name: str, embed_json: str) -> int | None:
+async def add_embed_template(
+    guild_id: int, name: str, embed_json: str, content_mode: str = "classic_embed"
+) -> int | None:
     """Guarda una plantilla de embed. Devuelve el id insertado, o None si el
     guild ya llegó al límite (mismo criterio que anuncios: se rechaza el alta,
-    no se evicta la plantilla más vieja)."""
+    no se evicta la plantilla más vieja). content_mode distingue embeds
+    clásicos ('classic_embed') de layouts Components V2 ('layout_v2')."""
     max_templates = embed_template_limit(guild_id)
     db = await get_db()
     async with _db_lock:
@@ -1058,8 +1096,9 @@ async def add_embed_template(guild_id: int, name: str, embed_json: str) -> int |
         if row and int(row[0]) >= max_templates:
             return None
         cursor = await db.execute(
-            "INSERT INTO embed_templates (guild_id, name, embed_json) VALUES (?, ?, ?)",
-            (guild_id, name, embed_json),
+            "INSERT INTO embed_templates (guild_id, name, embed_json, content_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (guild_id, name, embed_json, content_mode),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1068,7 +1107,7 @@ async def add_embed_template(guild_id: int, name: str, embed_json: str) -> int |
 async def list_embed_templates(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, embed_json, created_at, updated_at "
+        "SELECT id, name, embed_json, content_mode, created_at, updated_at "
         "FROM embed_templates WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
@@ -1078,8 +1117,9 @@ async def list_embed_templates(guild_id: int) -> list[dict]:
             "id": r[0],
             "name": r[1],
             "embed_json": r[2],
-            "created_at": r[3],
-            "updated_at": r[4],
+            "content_mode": r[3],
+            "created_at": r[4],
+            "updated_at": r[5],
         }
         for r in rows
     ]
@@ -1090,7 +1130,7 @@ async def get_embed_template(template_id: int, guild_id: int) -> dict | None:
     sin él, un guild podría leer/borrar plantillas de otro por IDOR."""
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, embed_json, created_at, updated_at "
+        "SELECT id, name, embed_json, content_mode, created_at, updated_at "
         "FROM embed_templates WHERE id=? AND guild_id=?",
         (template_id, guild_id),
     ) as cursor:
@@ -1101,20 +1141,25 @@ async def get_embed_template(template_id: int, guild_id: int) -> dict | None:
         "id": row[0],
         "name": row[1],
         "embed_json": row[2],
-        "created_at": row[3],
-        "updated_at": row[4],
+        "content_mode": row[3],
+        "created_at": row[4],
+        "updated_at": row[5],
     }
 
 
 async def update_embed_template(
-    template_id: int, guild_id: int, name: str, embed_json: str
+    template_id: int,
+    guild_id: int,
+    name: str,
+    embed_json: str,
+    content_mode: str = "classic_embed",
 ) -> bool:
     db = await get_db()
     async with _db_lock:
         cursor = await db.execute(
-            "UPDATE embed_templates SET name=?, embed_json=?, updated_at=datetime('now') "
-            "WHERE id=? AND guild_id=?",
-            (name, embed_json, template_id, guild_id),
+            "UPDATE embed_templates SET name=?, embed_json=?, content_mode=?, "
+            "updated_at=datetime('now') WHERE id=? AND guild_id=?",
+            (name, embed_json, content_mode, template_id, guild_id),
         )
         updated = cursor.rowcount > 0
         await db.commit()

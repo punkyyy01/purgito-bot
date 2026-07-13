@@ -3,13 +3,19 @@ por intervalo o a una hora fija (ver /settings > Anuncios). Distinto de
 frases_especiales (esas se mezclan al azar en el chat Markov)."""
 
 import asyncio
-import json
 import logging
+
+import json
 
 import discord
 from discord.ext import commands, tasks
 
-from db import get_due_scheduled_announcements, update_announcement_last_sent
+from db import (
+    get_due_scheduled_announcements,
+    normalize_embeds_json,
+    update_announcement_last_sent,
+)
+from layout_v2 import build_layout_view
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +42,23 @@ class Anuncios(commands.Cog):
                 perms = channel.permissions_for(channel.guild.me)
                 if not perms.send_messages:
                     return
-                if item.get("embed_json"):
-                    # Anuncio-embed creado desde el editor del panel web.
+                if item.get("embed_json") and item.get("content_mode") == "layout_v2":
+                    # Layout Components V2 armado en el editor del panel.
                     if not perms.embed_links:
                         return
-                    embed = discord.Embed.from_dict(json.loads(item["embed_json"]))
-                    await channel.send(embed=embed)
+                    view = build_layout_view(json.loads(item["embed_json"]))
+                    await channel.send(view=view)
+                elif item.get("embed_json"):
+                    # Embeds clásicos. El JSON es siempre una lista (Discord
+                    # admite hasta 10); normalize_embeds_json envuelve el formato
+                    # viejo de un solo dict, así que este branch no las distingue.
+                    if not perms.embed_links:
+                        return
+                    embeds = [
+                        discord.Embed.from_dict(e)
+                        for e in normalize_embeds_json(item["embed_json"])
+                    ]
+                    await channel.send(embeds=embeds)
                 else:
                     await channel.send(item["message"])
                 await update_announcement_last_sent(item["id"])

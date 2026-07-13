@@ -62,6 +62,7 @@ from db import (
     get_chat_settings,
     list_embed_templates,
     list_frases_especiales,
+    normalize_embeds_json,
     list_gif_urls,
     list_ignored_channels,
     list_meme_schedules,
@@ -79,6 +80,7 @@ from db import (
     update_last_video_id,
 )
 from gif_gallery import GIF_GALLERY_HTML
+from layout_v2 import build_layout_view, validate_layout_v2_payload
 from pages.panel import PANEL_HTML
 from pages.selector import SELECTOR_HTML
 from utils import LRUDict
@@ -974,6 +976,7 @@ _EMBED_MAX_FIELD_VALUE = 1024
 _EMBED_MAX_FOOTER = 2048
 _EMBED_MAX_AUTHOR = 256
 _EMBED_MAX_TOTAL = 6000
+_EMBED_MAX_COUNT = 10  # Discord: máximo de embeds por mensaje en modo clásico.
 
 
 def validate_embed_payload(embed: dict) -> str | None:
@@ -1044,6 +1047,78 @@ def validate_embed_payload(embed: dict) -> str | None:
     return None
 
 
+def validate_embeds_payload(embeds) -> str | None:
+    """Valida una lista de hasta 10 embeds (modo clásico). Cada embed se valida
+    con validate_embed_payload — el tope de 6000 caracteres es POR embed, no hay
+    límite global adicional entre embeds distintos. Convierte los colores hex a
+    int in place (efecto lateral heredado de validate_embed_payload)."""
+    if not isinstance(embeds, list) or not embeds:
+        return "se esperaba una lista de al menos un embed"
+    if len(embeds) > _EMBED_MAX_COUNT:
+        return f"máximo {_EMBED_MAX_COUNT} embeds por mensaje"
+    for i, embed in enumerate(embeds):
+        err = validate_embed_payload(embed)
+        if err:
+            return f"Embed {i + 1}: {err}"
+    return None
+
+
+def _extract_embeds(data: dict) -> tuple[list, str | None]:
+    """Saca la lista de embeds del body y la valida. Acepta el formato nuevo
+    ({"embeds": [...]}); no hay clientes con el formato viejo de {"embed": {...}}
+    porque el panel es el único consumidor y ya manda arrays."""
+    embeds = data.get("embeds")
+    err = validate_embeds_payload(embeds)
+    return (embeds or []), err
+
+
+def _block_text(b: dict) -> str:
+    kind = b.get("type")
+    if kind == "text":
+        return (b.get("content") or "").strip()
+    if kind == "section":
+        for tx in b.get("texts", []) or []:
+            if isinstance(tx, str) and tx.strip():
+                return tx.strip()
+    if kind == "container":
+        for c in b.get("children", []) or []:
+            s = _block_text(c)
+            if s:
+                return s
+    return ""
+
+
+def _layout_preview(layout: dict) -> str:
+    """Texto legible del primer bloque con contenido, para el listado de
+    /settings en Discord (donde `message` no puede ser NULL)."""
+    for b in layout.get("blocks", []) or []:
+        s = _block_text(b)
+        if s:
+            return s[:60]
+    return "[layout]"
+
+
+def _extract_content(data: dict) -> tuple[str, str, str, str | None]:
+    """Valida el contenido del body según content_mode y devuelve
+    (content_mode, json_a_guardar, preview_legible, error).
+
+    - 'layout_v2': valida contra validate_layout_v2_payload, guarda el layout.
+    - 'classic_embed' (default): valida el array de embeds, guarda la lista.
+    Los dos formatos comparten la columna embed_json; content_mode desambigua."""
+    mode = data.get("content_mode") or "classic_embed"
+    if mode == "layout_v2":
+        layout = data.get("layout")
+        err = validate_layout_v2_payload(layout)
+        if err:
+            return "", "", "", err
+        return mode, json.dumps(layout), _layout_preview(layout), None
+    embeds, err = _extract_embeds(data)
+    if err:
+        return "", "", "", err
+    preview = (embeds[0].get("title") or "").strip()[:60] or "[embed]"
+    return "classic_embed", json.dumps(embeds), preview, None
+
+
 def _embed_target_channel(request: web.Request, guild_id: int, channel_id: int | None):
     """(canal, None) si el canal es del guild y el bot puede mandar embeds ahí;
     si no, (None, respuesta de error)."""
@@ -1072,19 +1147,27 @@ async def _api_embeds_send(request: web.Request, guild_id: int) -> web.Response:
     data = await _json_body(request)
     if data is None:
         return web.json_response({"error": "body inválido"}, status=400)
-    embed = data.get("embed")
-    err = validate_embed_payload(embed)
+    mode = data.get("content_mode") or "classic_embed"
+    if mode == "layout_v2":
+        err = validate_layout_v2_payload(data.get("layout"))
+    else:
+        _, err = _extract_embeds(data)
     if err:
         return web.json_response({"error": err}, status=400)
     channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
     if denied is not None:
         return denied
     try:
-        await channel.send(embed=discord.Embed.from_dict(embed))
+        if mode == "layout_v2":
+            await channel.send(view=build_layout_view(data["layout"]))
+        else:
+            await channel.send(
+                embeds=[discord.Embed.from_dict(e) for e in data["embeds"]]
+            )
     except discord.HTTPException as e:
         # Típicamente una URL de imagen/ícono que Discord rechaza.
         return web.json_response(
-            {"error": f"Discord rechazó el embed: {e.text or e}"}, status=400
+            {"error": f"Discord rechazó el contenido: {e.text or e}"}, status=400
         )
     return web.json_response({"sent": True})
 
@@ -1096,14 +1179,14 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
     data = await _json_body(request)
     if data is None:
         return web.json_response({"error": "body inválido"}, status=400)
-    embed = data.get("embed")
-    err = validate_embed_payload(embed)
+    content_mode, payload, preview, err = _extract_content(data)
     if err:
         return web.json_response({"error": err}, status=400)
     channel, denied = _embed_target_channel(request, guild_id, _to_int(data.get("channel_id")))
     if denied is not None:
         return denied
 
+    # `mode` es la cadencia del anuncio (interval/daily), distinta de content_mode.
     mode = data.get("mode")
     interval_minutes = hour = minute = None
     if mode == "interval":
@@ -1122,9 +1205,6 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
         return web.json_response({"error": "mode debe ser 'interval' o 'daily'"}, status=400)
 
     session = await get_session(request)
-    # message no puede ser NULL y es lo que muestra el listado de /settings en
-    # Discord: se usa el título del embed como descripción legible.
-    preview = (embed.get("title") or "").strip()[:60] or "[embed]"
     new_id = await add_scheduled_announcement(
         guild_id,
         channel.id,
@@ -1134,7 +1214,8 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
         interval_minutes=interval_minutes,
         hour=hour,
         minute=minute,
-        embed_json=json.dumps(embed),
+        embed_json=payload,
+        content_mode=content_mode,
     )
     if new_id is None:
         return web.json_response(
@@ -1145,13 +1226,21 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
 
 
 def _template_row_to_json(t: dict) -> dict:
-    return {
+    content_mode = t.get("content_mode") or "classic_embed"
+    out = {
         "id": t["id"],
         "name": t["name"],
-        "embed": json.loads(t["embed_json"]),
+        "content_mode": content_mode,
         "created_at": t["created_at"],
         "updated_at": t["updated_at"],
     }
+    if content_mode == "layout_v2":
+        out["layout"] = json.loads(t["embed_json"])
+    else:
+        # Siempre una lista, incluso para plantillas viejas guardadas como dict
+        # suelto (normalize_embeds_json las envuelve al leer).
+        out["embeds"] = normalize_embeds_json(t["embed_json"])
+    return out
 
 
 @guild_api
@@ -1166,18 +1255,18 @@ async def _api_embed_templates_get(request: web.Request, guild_id: int) -> web.R
     )
 
 
-def _template_body(data: dict | None) -> tuple[str, dict] | web.Response:
-    """Valida el body común de POST/PUT de plantillas: (name, embed) o error."""
+def _template_body(data: dict | None) -> tuple[str, str, str] | web.Response:
+    """Valida el body común de POST/PUT de plantillas: (name, json, content_mode)
+    o una respuesta de error."""
     if data is None:
         return web.json_response({"error": "body inválido"}, status=400)
     name = str(data.get("name") or "").strip()[:100]
     if not name:
         return web.json_response({"error": "la plantilla necesita un nombre"}, status=400)
-    embed = data.get("embed")
-    err = validate_embed_payload(embed)
+    content_mode, payload, _preview, err = _extract_content(data)
     if err:
         return web.json_response({"error": err}, status=400)
-    return name, embed
+    return name, payload, content_mode
 
 
 @guild_api
@@ -1185,8 +1274,8 @@ async def _api_embed_templates_post(request: web.Request, guild_id: int) -> web.
     parsed = _template_body(await _json_body(request))
     if isinstance(parsed, web.Response):
         return parsed
-    name, embed = parsed
-    new_id = await add_embed_template(guild_id, name, json.dumps(embed))
+    name, payload, content_mode = parsed
+    new_id = await add_embed_template(guild_id, name, payload, content_mode)
     if new_id is None:
         return web.json_response(
             {"error": "límite de plantillas alcanzado — elimina una antes de guardar otra"},
@@ -1203,8 +1292,10 @@ async def _api_embed_template_put(request: web.Request, guild_id: int) -> web.Re
     parsed = _template_body(await _json_body(request))
     if isinstance(parsed, web.Response):
         return parsed
-    name, embed = parsed
-    updated = await update_embed_template(template_id, guild_id, name, json.dumps(embed))
+    name, payload, content_mode = parsed
+    updated = await update_embed_template(
+        template_id, guild_id, name, payload, content_mode
+    )
     if not updated:
         return web.json_response({"error": "plantilla no encontrada"}, status=404)
     return web.json_response({"updated": True})
@@ -1349,7 +1440,26 @@ async def _api_premium_checkout(request: web.Request, guild_id: int) -> web.Resp
                 ),
             }
         )
-    except Exception:
+    except Exception as exc:
+        if "insufficient_scope" in str(exc):
+            log.error(
+                "Polar rechazó el checkout por permisos insuficientes del token "
+                "(guild %s, plan %s, server %s). Verifica que POLAR_ACCESS_TOKEN "
+                "sea un token de organización con permisos para crear checkouts y "
+                "que apunte al entorno correcto.",
+                guild_id,
+                plan,
+                POLAR_SERVER,
+            )
+            return web.json_response(
+                {
+                    "error": (
+                        "Polar rechazó la creación del checkout por permisos "
+                        "insuficientes del token"
+                    )
+                },
+                status=502,
+            )
         log.exception(
             "Fallo creando checkout de Polar (guild %s, plan %s)", guild_id, plan
         )
