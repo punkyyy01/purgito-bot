@@ -620,6 +620,108 @@ function embedImg(attrs) {
   return img;
 }
 
+// ---------- Markdown estilo Discord + menciones para el Preview ----------
+// Puramente visual: el JSON guardado/enviado nunca pasa por acá (docDicts,
+// blockToApi, etc. siguen usando el texto crudo). _roles/_channels son el
+// mismo cache que ya alimenta el picker de menciones (5.1).
+
+// <@&id> -> @Rol (con su color real si tiene uno asignado), <#id> -> #canal,
+// <@id>/<@!id> -> @usuario genérico (no hay endpoint de miembros en el panel).
+// Si el rol/canal ya no existe, se muestra un placeholder mudo en vez de romper.
+function resolveMentionNode(kind, id) {
+  if (kind === 'role') {
+    const r = (_roles || []).find(x => x.id === id);
+    if (!r) return el('span', { class: 'd-embed-mention d-embed-mention-unknown' }, '@rol-eliminado');
+    const span = el('span', { class: 'd-embed-mention' }, '@' + r.name);
+    if (r.color && r.color !== '#000000') {
+      span.style.color = r.color;
+      span.style.background = `color-mix(in srgb, ${r.color} 30%, transparent)`;
+    }
+    return span;
+  }
+  if (kind === 'channel') {
+    const c = (_channels || []).find(x => x.id === id);
+    if (!c) return el('span', { class: 'd-embed-mention d-embed-mention-unknown' }, '#canal-eliminado');
+    return el('span', { class: 'd-embed-mention' }, '#' + c.name);
+  }
+  return el('span', { class: 'd-embed-mention' }, '@usuario');
+}
+
+// Formato inline: código, spoiler, negrita+cursiva, negrita, subrayado,
+// tachado, cursiva (* o _), y las tres menciones. El orden de la alternancia
+// importa (más específico primero: ***, luego **, luego *) para que la
+// regex no confunda negrita con cursiva.
+const MD_INLINE_RE = /`([^`\n]+?)`|\|\|([\s\S]+?)\|\||\*\*\*([\s\S]+?)\*\*\*|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\*([^*\n]+?)\*|_([^_\n]+?)_|<@&(\d+)>|<#(\d+)>|<@!?(\d+)>/g;
+
+function parseInline(text) {
+  const nodes = [];
+  const re = new RegExp(MD_INLINE_RE);
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) nodes.push(document.createTextNode(text.slice(last, m.index)));
+    if (m[1] !== undefined) nodes.push(el('code', { class: 'd-embed-code' }, m[1]));
+    else if (m[2] !== undefined) nodes.push(el('span', { class: 'd-embed-spoiler' }, ...parseInline(m[2])));
+    else if (m[3] !== undefined) nodes.push(el('strong', {}, el('em', {}, ...parseInline(m[3]))));
+    else if (m[4] !== undefined) nodes.push(el('strong', {}, ...parseInline(m[4])));
+    else if (m[5] !== undefined) nodes.push(el('u', {}, ...parseInline(m[5])));
+    else if (m[6] !== undefined) nodes.push(el('s', {}, ...parseInline(m[6])));
+    else if (m[7] !== undefined) nodes.push(el('em', {}, ...parseInline(m[7])));
+    else if (m[8] !== undefined) nodes.push(el('em', {}, ...parseInline(m[8])));
+    else if (m[9] !== undefined) nodes.push(resolveMentionNode('role', m[9]));
+    else if (m[10] !== undefined) nodes.push(resolveMentionNode('channel', m[10]));
+    else if (m[11] !== undefined) nodes.push(resolveMentionNode('user', m[11]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
+  return nodes;
+}
+
+// Bloques: agrupa líneas consecutivas que empiezan con "> " en una cita;
+// el resto pasa por el formato inline. Los saltos de línea sobrantes los
+// resuelve el white-space:pre-wrap ya usado en .d-embed-desc/.lv2-text.
+function mdBlocksFromText(chunk) {
+  if (!chunk) return [];
+  const lines = chunk.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (/^>\s?/.test(lines[i])) {
+      const quote = el('div', { class: 'd-embed-quote' });
+      let first = true;
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        if (!first) quote.append(document.createTextNode('\n'));
+        quote.append(...parseInline(lines[i].replace(/^>\s?/, '')));
+        first = false;
+        i++;
+      }
+      out.push(quote);
+    } else {
+      const plain = [];
+      while (i < lines.length && !/^>\s?/.test(lines[i])) { plain.push(lines[i]); i++; }
+      out.push(...parseInline(plain.join('\n')));
+    }
+  }
+  return out;
+}
+
+// Bloques de código ``` ``` primero (protegidos del resto del parseo), y
+// dentro de cada tramo restante, citas + formato inline.
+function mdToNodes(raw) {
+  const text = raw || '';
+  const fenceRe = /```(?:[a-zA-Z0-9_+-]*\n)?([\s\S]*?)```/g;
+  const nodes = [];
+  let last = 0, m;
+  while ((m = fenceRe.exec(text))) {
+    if (m.index > last) nodes.push(...mdBlocksFromText(text.slice(last, m.index)));
+    let code = m[1];
+    if (code.endsWith('\n')) code = code.slice(0, -1);
+    nodes.push(el('div', { class: 'd-embed-codeblock' }, code));
+    last = fenceRe.lastIndex;
+  }
+  if (last < text.length) nodes.push(...mdBlocksFromText(text.slice(last)));
+  return nodes;
+}
+
 // Preview en vivo: reusar el mismo <img> entre re-renders evita que la imagen
 // se vuelva a decodificar (y parpadee) en cada tecla. El Set de "reclamados"
 // se reinicia por render, así dos embeds con la misma URL igual reciben nodos
@@ -1201,14 +1303,16 @@ function renderEmbedPreview(e) {
       e.author.icon_url ? previewImg({ src: e.author.icon_url, alt: '' }) : null,
       e.author.name));
   }
-  if (e.title) main.append(el('div', { class: 'd-embed-title' }, e.title));
-  if (e.description) main.append(el('div', { class: 'd-embed-desc' }, e.description));
+  // Título, descripción y fields soportan markdown/menciones como en Discord
+  // real; autor y footer (más abajo) son texto plano — Discord no los formatea.
+  if (e.title) main.append(el('div', { class: 'd-embed-title' }, ...mdToNodes(e.title)));
+  if (e.description) main.append(el('div', { class: 'd-embed-desc' }, ...mdToNodes(e.description)));
   if (e.fields) {
     const grid = el('div', { class: 'd-embed-fields' });
     for (const f of e.fields) {
       grid.append(el('div', { class: 'd-embed-field' + (f.inline ? ' inline' : '') },
-        el('div', { class: 'd-embed-field-name' }, f.name),
-        el('div', { class: 'd-embed-field-value' }, f.value)));
+        el('div', { class: 'd-embed-field-name' }, ...mdToNodes(f.name)),
+        el('div', { class: 'd-embed-field-value' }, ...mdToNodes(f.value))));
     }
     main.append(grid);
   }
@@ -1869,9 +1973,10 @@ function renderPreviewBlock(b) {
     if (b.accent_color != null) cont.style.borderLeft = '4px solid ' + (colorToHex(b.accent_color) || '#8B6EF5');
     return cont;
   }
-  if (b.type === 'text') return el('div', { class: 'lv2-text' }, b.content || '');
+  if (b.type === 'text') return el('div', { class: 'lv2-text' }, ...mdToNodes(b.content || ''));
   if (b.type === 'section') {
-    const texts = el('div', { class: 'lv2-section-texts' }, b.texts.map(t => el('div', { class: 'lv2-text' }, t)));
+    const texts = el('div', { class: 'lv2-section-texts' },
+      b.texts.map(t => el('div', { class: 'lv2-text' }, ...mdToNodes(t))));
     let acc;
     if (b.accessory.type === 'thumbnail') acc = b.accessory.url ? previewImg({ src: b.accessory.url, alt: '', class: 'lv2-thumb' }) : null;
     else acc = lv2Button(b.accessory);

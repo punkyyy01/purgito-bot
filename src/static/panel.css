@@ -856,6 +856,55 @@ h1 {
 }
 .d-embed-footer img { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }
 
+/* ---------- Markdown estilo Discord + menciones resueltas en el Preview ----------
+   Colores propios del preview (no tokens del panel), igual que el resto de
+   .d-embed*/.lv2-*: tiene que parecerse a Discord, no al panel. Se comparte
+   entre el preview de embeds clásicos y el de Layout V2. */
+.d-embed-code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+}
+.d-embed-codeblock {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.4;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px 10px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0;
+}
+.d-embed-quote {
+  display: block;
+  border-left: 3px solid #4E5058;
+  padding-left: 10px;
+  margin: 2px 0;
+  white-space: pre-wrap;
+}
+.d-embed-spoiler {
+  background: #1a1a1e;
+  color: transparent;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.d-embed-mention {
+  background: color-mix(in srgb, #5865F2 30%, transparent);
+  color: #C9CDFB;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 500;
+}
+.d-embed-mention-unknown {
+  background: rgba(255, 255, 255, 0.06);
+  color: #B5BAC1;
+  font-weight: 400;
+}
+
 .tpl-dot {
   width: 12px;
   height: 12px;
