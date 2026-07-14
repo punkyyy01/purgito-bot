@@ -66,13 +66,23 @@ function flash(container, ok, msg) {
 // pages/panel.py). Por ahora solo lo usa el tab de GIFs — flash() se queda
 // para el resto de tabs, ver nota en la respuesta de este cambio.
 let _toastTimer = null;
-function toast(msg, type) {
+// action opcional: { label, onclick } — para avisos que ofrecen deshacer/
+// descartar algo (ej. el borrador recuperado). El resto de llamadas sigue
+// pasando solo (msg, type).
+function toast(msg, type, action) {
   const box = document.getElementById('toast');
   if (!box) return;
-  box.textContent = msg;
+  box.innerHTML = '';
+  box.append(document.createTextNode(msg));
+  if (action) {
+    box.append(el('button', {
+      class: 'toast-action',
+      onclick: () => { clearTimeout(_toastTimer); box.className = ''; action.onclick(); },
+    }, action.label));
+  }
   box.className = 'show ' + (type || '');
   clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { box.className = ''; }, 3200);
+  _toastTimer = setTimeout(() => { box.className = ''; }, action ? 6000 : 3200);
 }
 
 function renderError(box, e) {
@@ -999,8 +1009,17 @@ let _insPop = null;
 function closeInsertPopover() {
   if (_insPop) { _insPop.remove(); _insPop = null; }
   document.removeEventListener('mousedown', _insPopOutside);
+  document.removeEventListener('scroll', _insPopScroll, true);
 }
 function _insPopOutside(e) {
+  if (_insPop && !_insPop.contains(e.target)) closeInsertPopover();
+}
+// El popover es position:fixed calculado una sola vez al abrir; si el
+// formulario/preview (ahora con scroll propio) se mueve por debajo, el
+// popover quedaría "flotando" desconectado de su campo. Cerrarlo en
+// cualquier scroll fuera de él mismo (su lista interna sí puede scrollear
+// sin cerrarse). 'scroll' no burbujea, así que se escucha en captura.
+function _insPopScroll(e) {
   if (_insPop && !_insPop.contains(e.target)) closeInsertPopover();
 }
 
@@ -1123,7 +1142,10 @@ function openInsertPopover(anchor, input, tabs, initialTab) {
   pop.style.top = Math.min(rect.bottom + 4, window.innerHeight - 340) + 'px';
   pop.style.left = Math.min(rect.left, window.innerWidth - 340) + 'px';
   _insPop = pop;
-  setTimeout(() => document.addEventListener('mousedown', _insPopOutside), 0);
+  setTimeout(() => {
+    document.addEventListener('mousedown', _insPopOutside);
+    document.addEventListener('scroll', _insPopScroll, true);
+  }, 0);
   renderTabs();
   renderBody();
 }
@@ -1345,6 +1367,41 @@ function openHistoryModal() {
   panelModal('Historial local', body);
 }
 
+// --- Borrador automático (autosave del estado en progreso) ---
+// Distinto del historial de arriba: acá hay UN solo slot por guild+modo que
+// se restaura solo al entrar, sin tope de versiones ni expiración por
+// tiempo (localStorage no expira nada por sí solo, así que no hace falta
+// lógica de TTL para lograr "indefinido" — solo evitar borrarlo por error).
+// Vive hasta que el usuario lo descarta, limpia el editor, o lo consume un
+// envío/guardado exitoso (ver saveEmbedDraft/clearEmbedDraft más abajo).
+let _draftTimer = null;
+
+function draftKey(mode) { return `purgito_draft_${GUILD_ID}_${mode}`; }
+
+function saveEmbedDraft() {
+  const doc = _embedMode === 'layout' ? _layoutDoc : _embedDoc;
+  if (!doc) return;
+  try { localStorage.setItem(draftKey(_embedMode), JSON.stringify(doc)); }
+  catch (e) { /* quota llena: el borrador es una comodidad, no crítico */ }
+}
+
+function scheduleDraftSave() {
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(saveEmbedDraft, 3000);
+}
+
+function readEmbedDraft(mode) {
+  try {
+    const raw = localStorage.getItem(draftKey(mode));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function clearEmbedDraft(mode) {
+  clearTimeout(_draftTimer);
+  try { localStorage.removeItem(draftKey(mode)); } catch (e) {}
+}
+
 // --- Modo JSON (5.5) ---
 
 function openJsonModal() {
@@ -1525,9 +1582,19 @@ async function renderEmbedEditor(box) {
 }
 
 function renderClassicEditor(box, channels, roles) {
-  if (!_embedDoc) _embedDoc = blankDoc();
+  if (!_embedDoc) {
+    const draft = readEmbedDraft('classic');
+    if (draft) {
+      _embedDoc = draft;
+      toast('Recuperamos tu borrador anterior', 'ok', {
+        label: 'Descartar', onclick: () => { clearEmbedDraft('classic'); _embedDoc = blankDoc(); loadEmbeds(); },
+      });
+    } else {
+      _embedDoc = blankDoc();
+    }
+  }
   const doc = _embedDoc;
-  // Docs restaurados de un historial anterior a la Fase 5 no traen sendOpts.
+  // Docs restaurados de un historial/borrador anterior a la Fase 5 no traen sendOpts.
   if (!doc.sendOpts) doc.sendOpts = blankSendOpts();
   const s = doc.embeds[doc.active];  // embed activo
 
@@ -1538,6 +1605,7 @@ function renderClassicEditor(box, channels, roles) {
     previewBox.append(renderEmbedsPreview(doc.embeds.map(embedDict)));
     endPreviewRender();
     scheduleHistorySnapshot();
+    scheduleDraftSave();
   }
 
   function bound(tag, key, attrs) {
@@ -1677,6 +1745,10 @@ function renderClassicEditor(box, channels, roles) {
         } else {
           await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, embeds: dicts, send_options: sendOpts } });
           toast(dicts.length > 1 ? `${dicts.length} embeds enviados` : 'Embed enviado', 'ok');
+          // Envío inmediato ya salió: el borrador de "lo que tengo a medio
+          // escribir" dejó de tener sentido (a diferencia de programar, donde
+          // seguís editando variantes). Ver criterio en el reporte.
+          clearEmbedDraft('classic');
         }
       } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
     },
@@ -1708,7 +1780,7 @@ function renderClassicEditor(box, channels, roles) {
 
   const clearBtn = el('button', {
     class: 'btn btn-secondary',
-    onclick: () => { _embedDoc = blankDoc(); loadEmbeds(); },
+    onclick: () => { clearEmbedDraft('classic'); _embedDoc = blankDoc(); loadEmbeds(); },
   }, 'Limpiar');
 
   const histBtn = el('button', { class: 'btn btn-secondary', onclick: openHistoryModal }, 'Historial');
@@ -2137,7 +2209,17 @@ function renderPreviewBlock(b) {
 }
 
 function renderLayoutEditor(box, channels, roles) {
-  if (!_layoutDoc) _layoutDoc = blankLayoutDoc();
+  if (!_layoutDoc) {
+    const draft = readEmbedDraft('layout');
+    if (draft) {
+      _layoutDoc = draft;
+      toast('Recuperamos tu borrador anterior', 'ok', {
+        label: 'Descartar', onclick: () => { clearEmbedDraft('layout'); _layoutDoc = blankLayoutDoc(); loadEmbeds(); },
+      });
+    } else {
+      _layoutDoc = blankLayoutDoc();
+    }
+  }
   const doc = _layoutDoc;
   if (!doc.sendOpts) doc.sendOpts = blankSendOpts();
 
@@ -2151,6 +2233,7 @@ function renderLayoutEditor(box, channels, roles) {
     previewBox.append(renderLayoutPreview(doc.blocks.map(blockToApi)));
     endPreviewRender();
     scheduleHistorySnapshot();
+    scheduleDraftSave();
   }
 
   const blocksList = el('div', { class: 'layout-list' });
@@ -2200,6 +2283,7 @@ function renderLayoutEditor(box, channels, roles) {
         } else {
           await apiFetch(`/api/server/${GUILD_ID}/embeds/send`, { method: 'POST', body: { channel_id: chSel.value, content_mode: 'layout_v2', layout, send_options: sendOpts } });
           toast('Layout enviado', 'ok');
+          clearEmbedDraft('layout'); // ver criterio (envío inmediato) en el reporte
         }
       } catch (e) { toast(e.message, e.status === 429 ? 'warn' : 'err'); }
     },
@@ -2228,7 +2312,7 @@ function renderLayoutEditor(box, channels, roles) {
     },
   }, 'Guardar como plantilla');
 
-  const clearBtn = el('button', { class: 'btn btn-secondary', onclick: () => { _layoutDoc = blankLayoutDoc(); loadEmbeds(); } }, 'Limpiar');
+  const clearBtn = el('button', { class: 'btn btn-secondary', onclick: () => { clearEmbedDraft('layout'); _layoutDoc = blankLayoutDoc(); loadEmbeds(); } }, 'Limpiar');
   const histBtn = el('button', { class: 'btn btn-secondary', onclick: openHistoryModal }, 'Historial');
   const jsonBtn = el('button', { class: 'btn btn-secondary', onclick: openJsonModal }, 'Ver/editar JSON');
 
@@ -2436,6 +2520,7 @@ async function loadPremium() {
       ['Mensajes de usuario en memoria', '5.000', '20.000'],
       ['GIFs guardados', '1.500', '4.000'],
       ['Imágenes en la colección de memes', '75', '200'],
+      ['Plantillas de embeds guardadas', '20', '50'],
     ];
     if (data.premium) {
       box.append(el('div', { class: 'premium-layout' },
@@ -2449,7 +2534,8 @@ async function loadPremium() {
             el('li', {}, 'Límites de corpus ampliados a 50.000 mensajes'),
             el('li', {}, 'Límite de corpus de usuario ampliado a 20.000 mensajes'),
             el('li', {}, 'Límite de GIFs guardados ampliado a 4.000'),
-            el('li', {}, 'Colección de memes ampliada a 200 imágenes')))));
+            el('li', {}, 'Colección de memes ampliada a 200 imágenes'),
+            el('li', {}, 'Límite de plantillas de embeds ampliado a 50')))));
       return;
     }
     const cardWide = el('div', { class: 'premium-card premium-card-wide' },

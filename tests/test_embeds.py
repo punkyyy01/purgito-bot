@@ -178,13 +178,13 @@ def test_normalize_empty_and_none():
 def test_add_embed_template_rejects_over_limit(memory_db):
     guild_id = 1
     embed_json = json.dumps({"title": "t"})
-    for i in range(5):  # MAX_EMBED_TEMPLATES_PER_GUILD_FREE=5 en limits.env
+    for i in range(20):  # MAX_EMBED_TEMPLATES_PER_GUILD_FREE=20 en limits.env
         new_id = asyncio.run(db.add_embed_template(guild_id, f"tpl{i}", embed_json))
         assert new_id is not None
-    rejected = asyncio.run(db.add_embed_template(guild_id, "tpl6", embed_json))
+    rejected = asyncio.run(db.add_embed_template(guild_id, "tpl21", embed_json))
     assert rejected is None
-    # El rechazo no evictó nada: siguen las 5 originales.
-    assert len(asyncio.run(db.list_embed_templates(guild_id))) == 5
+    # El rechazo no evictó nada: siguen las 20 originales.
+    assert len(asyncio.run(db.list_embed_templates(guild_id))) == 20
 
 
 # ─── Plantillas: propiedad por guild_id (IDOR) ───────────────────────────────

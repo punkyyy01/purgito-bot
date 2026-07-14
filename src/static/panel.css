@@ -805,8 +805,6 @@ h1 {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 16px;
-  position: sticky;
-  top: 0;
 }
 .d-embed {
   display: flex;
@@ -924,9 +922,28 @@ h1 {
   vertical-align: middle;
 }
 
+/* Scroll independiente entre formulario y Preview (desktop): cada columna
+   es su propio contenedor con altura acotada al viewport, en vez de que
+   ambas scrolleen juntas como una sola página. El offset es una
+   aproximación de lo que ocupa arriba (padding de .content + h1 + tabs +
+   selector de modo) — si en algún momento resulta corto, .content sigue
+   teniendo su propio overflow-y:auto como red de seguridad (se ve un
+   scroll extra en la página en vez de contenido cortado). No aplica en
+   mobile: ahí las columnas se apilan y todo fluye como una sola página. */
+@media (min-width: 1101px) {
+  .embed-layout {
+    height: calc(100vh - 230px);
+    min-height: 360px;
+    overflow: hidden;
+  }
+  .embed-form, .d-embed-wrap {
+    height: 100%;
+    overflow-y: auto;
+  }
+  .embed-form { padding-right: 4px; }
+}
 @media (max-width: 1100px) {
   .embed-layout { grid-template-columns: 1fr; }
-  .d-embed-wrap { position: static; }
 }
 @media (max-width: 768px) {
   .embed-two { grid-template-columns: 1fr; }
@@ -1268,11 +1285,23 @@ h1 {
   transition: opacity 220ms ease, transform 220ms ease;
   z-index: 9999;
 }
-#toast.show { opacity: 1; transform: none; }
+#toast.show { opacity: 1; transform: none; pointer-events: auto; }
 #toast.show.ok   { border-color: var(--success); }
 #toast.show.err  { border-color: var(--danger); }
 /* Ámbar ya usado para --premium: mismo tono de "atención" sin sumar un color nuevo a la paleta. */
 #toast.show.warn { border-color: var(--premium); }
+.toast-action {
+  display: block;
+  margin-top: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-hover);
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 /* ---------- Responsive ---------- */
 

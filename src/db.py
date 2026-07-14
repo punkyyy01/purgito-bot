@@ -1102,8 +1102,8 @@ def embed_template_limit(guild_id: int | None) -> int:
         guild_id,
         "MAX_EMBED_TEMPLATES_PER_GUILD_FREE",
         "MAX_EMBED_TEMPLATES_PER_GUILD_PREMIUM",
-        5,
-        25,
+        20,
+        50,
     )
 
 
