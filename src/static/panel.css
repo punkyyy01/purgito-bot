@@ -799,6 +799,14 @@ h1 {
 }
 .embed-pill:hover { border-color: var(--accent); }
 .embed-pill.active { border-color: var(--accent); color: var(--accent); }
+/* Embed sin contenido: docDicts lo filtra al enviar, la pill lo anticipa. */
+.embed-pill.empty { opacity: 0.55; border-style: dashed; }
+
+/* Contador en vivo (suma de todos los embeds contra el límite de 6000). */
+.preview-header { display: flex; justify-content: space-between; align-items: baseline; }
+.char-counter { font-family: var(--font-mono); font-size: 12px; }
+.char-counter.near { color: var(--premium); }
+.char-counter.over { color: var(--danger); font-weight: 700; }
 .embed-pill-x { opacity: 0.6; font-size: 11px; }
 .embed-pill-x:hover { opacity: 1; color: var(--danger); }
 

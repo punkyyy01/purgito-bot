@@ -558,21 +558,26 @@ function docFromEmbeds(embeds, templateId, templateName, sendOptions) {
   return doc;
 }
 
+// Caracteres que Discord cuenta contra el límite de 6000 por mensaje.
+// Espejo de embed_char_count() en webapi.py — mantener en sync.
+function embedChars(e) {
+  let total = (e.title || '').length + (e.description || '').length
+    + ((e.footer && e.footer.text) || '').length + ((e.author && e.author.name) || '').length;
+  for (const f of e.fields || []) total += f.name.length + f.value.length;
+  return total;
+}
+
 function validateEmbedClient(e) {
   if ((e.title || '').length > EMBED_LIMITS.title) return `El título supera los ${EMBED_LIMITS.title} caracteres.`;
   if ((e.description || '').length > EMBED_LIMITS.description) return `La descripción supera los ${EMBED_LIMITS.description} caracteres.`;
   const fields = e.fields || [];
   if (fields.length > EMBED_LIMITS.fields) return `Máximo ${EMBED_LIMITS.fields} fields.`;
-  let total = (e.title || '').length + (e.description || '').length
-    + ((e.footer && e.footer.text) || '').length + ((e.author && e.author.name) || '').length;
   for (const f of fields) {
     if (f.name.length > EMBED_LIMITS.fieldName) return `Un field tiene el nombre demasiado largo (máx ${EMBED_LIMITS.fieldName}).`;
     if (f.value.length > EMBED_LIMITS.fieldValue) return `Un field tiene el valor demasiado largo (máx ${EMBED_LIMITS.fieldValue}).`;
-    total += f.name.length + f.value.length;
   }
   if (((e.footer && e.footer.text) || '').length > EMBED_LIMITS.footer) return `El footer supera los ${EMBED_LIMITS.footer} caracteres.`;
   if (((e.author && e.author.name) || '').length > EMBED_LIMITS.author) return `El autor supera los ${EMBED_LIMITS.author} caracteres.`;
-  if (total > EMBED_LIMITS.total) return `El embed supera los ${EMBED_LIMITS.total} caracteres en total.`;
   if (!e.title && !e.description && !fields.length && !e.image && !e.thumbnail && !e.author && !e.footer) {
     return 'El embed está vacío: completa al menos un campo.';
   }
@@ -580,12 +585,18 @@ function validateEmbedClient(e) {
 }
 
 // Valida el array completo (espejo de validate_embeds_payload en el backend).
+// El tope de 6000 aplica a la SUMA de todos los embeds del mensaje (regla real
+// de Discord), no por embed.
 function validateEmbedsClient(dicts) {
   if (!dicts.length) return 'Agrega al menos un embed con contenido.';
   if (dicts.length > EMBED_LIMITS.count) return `Máximo ${EMBED_LIMITS.count} embeds por mensaje.`;
   for (let i = 0; i < dicts.length; i++) {
     const err = validateEmbedClient(dicts[i]);
     if (err) return `Embed ${i + 1}: ${err}`;
+  }
+  const total = dicts.reduce((n, d) => n + embedChars(d), 0);
+  if (total > EMBED_LIMITS.total) {
+    return `El mensaje supera los ${EMBED_LIMITS.total} caracteres sumando todos los embeds (${total}).`;
   }
   return null;
 }
@@ -1654,11 +1665,28 @@ function renderClassicEditor(box, channels, roles) {
   const s = doc.embeds[doc.active];  // embed activo
 
   const previewBox = el('div', {});
+  // Contador en vivo contra el límite de 6000 (suma de todos los embeds del
+  // mensaje — mismo cálculo que validateEmbedsClient) + marca de tabs vacíos.
+  const charCounter = el('span', { class: 'char-counter' });
+  const embedPills = [];  // se llena al armar embedBar, más abajo
+  function refreshEmbedMeta(dicts) {
+    const total = dicts.reduce((n, d) => n + embedChars(d), 0);
+    charCounter.textContent = `${total.toLocaleString('es')} / ${EMBED_LIMITS.total.toLocaleString('es')}`;
+    charCounter.className = 'char-counter'
+      + (total > EMBED_LIMITS.total ? ' over' : total >= EMBED_LIMITS.total * 0.9 ? ' near' : '');
+    embedPills.forEach((pill, i) => {
+      const empty = !Object.keys(dicts[i] || {}).length;
+      pill.classList.toggle('empty', empty);
+      pill.title = empty ? 'Este embed está vacío y no se va a enviar' : '';
+    });
+  }
   function updatePreview() {
+    const dicts = doc.embeds.map(embedDict);
     previewBox.innerHTML = '';
     beginPreviewRender();
-    previewBox.append(renderEmbedsPreview(doc.embeds.map(embedDict)));
+    previewBox.append(renderEmbedsPreview(dicts));
     endPreviewRender();
+    refreshEmbedMeta(dicts);
     scheduleHistorySnapshot();
     scheduleDraftSave();
   }
@@ -1736,7 +1764,7 @@ function renderClassicEditor(box, channels, roles) {
   const atMax = doc.embeds.length >= EMBED_LIMITS.count;
   const embedBar = el('div', { class: 'embed-bar-tabs' });
   doc.embeds.forEach((_, i) => {
-    embedBar.append(el('div', {
+    const pill = el('div', {
       class: 'embed-pill' + (i === doc.active ? ' active' : ''),
       onclick: () => { doc.active = i; loadEmbeds(); },
     },
@@ -1749,7 +1777,9 @@ function renderClassicEditor(box, channels, roles) {
           if (doc.active >= doc.embeds.length) doc.active = doc.embeds.length - 1;
           loadEmbeds();
         },
-      }, '✗') : null));
+      }, '✗') : null);
+    embedPills.push(pill);
+    embedBar.append(pill);
   });
   embedBar.append(el('button', {
     class: 'btn btn-secondary btn-sm', disabled: atMax || null,
@@ -1906,7 +1936,9 @@ function renderClassicEditor(box, channels, roles) {
 
   box.append(el('div', { class: 'embed-layout' },
     form,
-    el('div', { class: 'd-embed-wrap' }, el('p', { class: 'dim', style: 'margin-top:0' }, 'Preview'), previewBox)));
+    el('div', { class: 'd-embed-wrap' },
+      el('p', { class: 'dim preview-header', style: 'margin-top:0' }, 'Preview', charCounter),
+      previewBox)));
   box.querySelectorAll('.autogrow').forEach(autoGrow);
   updatePreview();
   syncSched();

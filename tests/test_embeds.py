@@ -145,6 +145,16 @@ def test_embeds_array_reports_offending_index():
     assert err is not None and "Embed 2" in err
 
 
+def test_embeds_array_total_over_6000_combined():
+    # Cada embed respeta el límite individual, pero la suma del mensaje pasa
+    # de 6000 (regla real de Discord: el tope es por mensaje, no por embed).
+    embeds = [{"description": "x" * 3000}, {"description": "x" * 3001}]
+    assert validate_embeds_payload(embeds) is not None
+    # Justo en 6000 debe pasar.
+    embeds = [{"description": "x" * 3000}, {"description": "x" * 3000}]
+    assert validate_embeds_payload(embeds) is None
+
+
 def test_embeds_array_converts_each_color():
     embeds = [{"title": "a", "color": "#8B6EF5"}, {"title": "b", "color": "#000000"}]
     assert validate_embeds_payload(embeds) is None

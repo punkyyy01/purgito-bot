@@ -1004,6 +1004,24 @@ _EMBED_MAX_TOTAL = 6000
 _EMBED_MAX_COUNT = 10  # Discord: máximo de embeds por mensaje en modo clásico.
 
 
+def embed_char_count(embed: dict) -> int:
+    """Caracteres que Discord cuenta contra el límite de 6000 por mensaje:
+    title + description + footer.text + author.name + fields (name y value).
+    Espejo de embedChars() en panel.js — mantener en sync."""
+    fields = embed.get("fields") or []
+    return (
+        len(embed.get("title") or "")
+        + len(embed.get("description") or "")
+        + len((embed.get("footer") or {}).get("text") or "")
+        + len((embed.get("author") or {}).get("name") or "")
+        + sum(
+            len(f.get("name") or "") + len(f.get("value") or "")
+            for f in fields
+            if isinstance(f, dict)
+        )
+    )
+
+
 def validate_embed_payload(embed: dict) -> str | None:
     """Valida un dict de embed contra los límites reales de Discord.
 
@@ -1033,7 +1051,6 @@ def validate_embed_payload(embed: dict) -> str | None:
     if len(author_name) > _EMBED_MAX_AUTHOR:
         return f"author.name supera los {_EMBED_MAX_AUTHOR} caracteres"
 
-    total = len(title) + len(description) + len(footer_text) + len(author_name)
     for i, f in enumerate(fields):
         if not isinstance(f, dict):
             return f"field {i + 1} inválido"
@@ -1047,8 +1064,7 @@ def validate_embed_payload(embed: dict) -> str | None:
             return f"field {i + 1}: name supera los {_EMBED_MAX_FIELD_NAME} caracteres"
         if len(value) > _EMBED_MAX_FIELD_VALUE:
             return f"field {i + 1}: value supera los {_EMBED_MAX_FIELD_VALUE} caracteres"
-        total += len(name) + len(value)
-    if total > _EMBED_MAX_TOTAL:
+    if embed_char_count(embed) > _EMBED_MAX_TOTAL:
         return f"el embed supera los {_EMBED_MAX_TOTAL} caracteres en total"
 
     # Discord rechaza embeds sin contenido visible.
@@ -1074,9 +1090,10 @@ def validate_embed_payload(embed: dict) -> str | None:
 
 def validate_embeds_payload(embeds) -> str | None:
     """Valida una lista de hasta 10 embeds (modo clásico). Cada embed se valida
-    con validate_embed_payload — el tope de 6000 caracteres es POR embed, no hay
-    límite global adicional entre embeds distintos. Convierte los colores hex a
-    int in place (efecto lateral heredado de validate_embed_payload)."""
+    con validate_embed_payload, y además el tope de 6000 caracteres aplica a la
+    SUMA de todos los embeds del mensaje (regla real de Discord, no por embed).
+    Convierte los colores hex a int in place (efecto lateral heredado de
+    validate_embed_payload)."""
     if not isinstance(embeds, list) or not embeds:
         return "se esperaba una lista de al menos un embed"
     if len(embeds) > _EMBED_MAX_COUNT:
@@ -1085,6 +1102,12 @@ def validate_embeds_payload(embeds) -> str | None:
         err = validate_embed_payload(embed)
         if err:
             return f"Embed {i + 1}: {err}"
+    total = sum(embed_char_count(e) for e in embeds)
+    if total > _EMBED_MAX_TOTAL:
+        return (
+            f"el mensaje supera los {_EMBED_MAX_TOTAL} caracteres "
+            f"sumando todos los embeds ({total})"
+        )
     return None
 
 
