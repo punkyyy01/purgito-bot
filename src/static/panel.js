@@ -620,6 +620,49 @@ function embedImg(attrs) {
   return img;
 }
 
+// Preview en vivo: reusar el mismo <img> entre re-renders evita que la imagen
+// se vuelva a decodificar (y parpadee) en cada tecla. El Set de "reclamados"
+// se reinicia por render, así dos embeds con la misma URL igual reciben nodos
+// distintos (no se roban el nodo cacheado).
+const _previewImgCache = new Map();
+let _previewImgClaimed = null;
+function beginPreviewRender() { _previewImgClaimed = new Set(); }
+function endPreviewRender() { _previewImgClaimed = null; }
+function previewImg(attrs) {
+  const src = attrs.src || '';
+  if (_previewImgClaimed && src && !_previewImgClaimed.has(src) && _previewImgCache.has(src)) {
+    const img = _previewImgCache.get(src);
+    _previewImgClaimed.add(src);
+    if (attrs.class) img.className = attrs.class;
+    img.style.display = '';
+    return img;
+  }
+  const img = embedImg(attrs);
+  if (_previewImgClaimed && src) { _previewImgClaimed.add(src); _previewImgCache.set(src, img); }
+  return img;
+}
+
+// Grupo de campos con eyebrow-caret (la firma de Purgito). El caret ▍ es
+// decorativo y se pinta con ::before en CSS, así el lector de pantalla no lo
+// anuncia antes del título.
+function formGroup(title, ...children) {
+  return el('div', { class: 'form-group' },
+    el('div', { class: 'form-group-title' }, title), ...children);
+}
+
+// Estado vacío del preview con el caret parpadeante en vez de un rectángulo muerto.
+function previewEmpty(msg) {
+  return el('div', { class: 'preview-empty' },
+    el('div', { class: 'caret', 'aria-hidden': 'true' }, '▍'),
+    el('div', {}, msg || 'Así se va a ver tu mensaje'));
+}
+
+// Error de validación inline y persistente (a diferencia del toast). Vaciar con msg falsy.
+function showFormAlert(box, msg) {
+  box.innerHTML = '';
+  if (msg) box.append(el('div', { class: 'form-alert', role: 'alert' }, msg));
+}
+
 // ---------- Fase 5: helpers compartidos del editor ----------
 
 // Modal genérico del panel (historial, JSON). Cierra con ✗, click afuera o Escape.
@@ -891,14 +934,18 @@ function imageField(obj, key, onChange, opts = {}) {
   function set(url) { obj[key] = url; onChange(); render(); }
 
   async function handleUpload(file) {
-    const status = el('p', { class: 'dim', style: 'margin:4px 0' }, 'Subiendo…');
-    wrap.append(status);
+    // Estado de carga claro dentro del widget (no dejar el botón inerte).
+    wrap.innerHTML = '';
+    wrap.append(el('div', { class: 'img-uploading' }, spinner(), el('span', {}, 'Subiendo imagen…')));
     try {
       const url = await uploadImageBlob(file, file.name);
       set(url);
       toast('Imagen subida', 'ok');
     } catch (e) {
-      status.remove();
+      // El error queda visible en el campo (además del toast), no solo un toast
+      // que desaparece.
+      render();
+      wrap.prepend(el('div', { class: 'img-error' }, 'No se pudo subir: ' + e.message));
       toast(e.message, e.status === 429 ? 'warn' : 'err');
     }
   }
@@ -916,7 +963,7 @@ function imageField(obj, key, onChange, opts = {}) {
       return;
     }
 
-    const url = el('input', { type: 'url', placeholder: 'https://… o sube/pega una imagen' });
+    const url = el('input', { type: 'url', placeholder: '…o pega un enlace de imagen' });
     const gifNote = el('div', { class: 'embed-gif-note' });
     url.oninput = () => {
       if (!opts.gif) return;
@@ -935,7 +982,11 @@ function imageField(obj, key, onChange, opts = {}) {
 
     const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: 'display:none' });
     fileInput.onchange = () => { if (fileInput.files[0]) handleUpload(fileInput.files[0]); };
-    const uploadBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: () => fileInput.click() }, 'Subir archivo');
+    // Ajuste 5.2: "Subir" es la acción primaria (visual y funcionalmente), el
+    // campo de URL pasa a secundario para que el usuario no-técnico no vea
+    // "esto empieza con una URL".
+    const uploadBtn = el('button', { type: 'button', class: 'btn btn-primary', onclick: () => fileInput.click() },
+      icon('image'), 'Subir imagen');
     const pasteBtn = el('button', {
       type: 'button', class: 'btn btn-secondary btn-sm', title: 'También puedes pegar con ' + _PASTE_HINT + ' con el campo enfocado',
       onclick: async () => {
@@ -958,14 +1009,16 @@ function imageField(obj, key, onChange, opts = {}) {
       if (file) { ev.preventDefault(); handleUpload(file); }
     });
 
-    const row = el('div', { class: 'img-field-row' }, url, uploadBtn, pasteBtn, fileInput);
+    const secondary = el('div', { class: 'img-field-secondary' }, url, pasteBtn);
     if (_uploadedImages.length) {
       const reuse = el('select', {}, el('option', { value: '' }, 'Reusar archivo ya subido…'));
       for (const u of _uploadedImages) reuse.append(el('option', { value: u.url }, u.name));
       reuse.onchange = () => { if (reuse.value) set(reuse.value); };
-      row.append(reuse);
+      secondary.append(reuse);
     }
-    wrap.append(row, gifNote);
+    wrap.append(
+      el('div', { class: 'img-field-primary' }, uploadBtn, fileInput),
+      secondary, gifNote);
   }
 
   render();
@@ -1010,7 +1063,7 @@ function openHistoryModal() {
   saveHistorySnapshot(); // el estado actual también entra, así restaurar es reversible
   const list = readHistory();
   const body = el('div', { class: 'hist-list' });
-  if (!list.length) body.append(emptyState('Todavía no hay versiones guardadas.'));
+  if (!list.length) body.append(emptyState('Todavía no hay versiones guardadas — se van a guardar solas a medida que editás.'));
   list.forEach((entry, i) => {
     const previewBox = el('div', { style: 'display:none' });
     let previewLoaded = false;
@@ -1141,11 +1194,11 @@ function sendOptionsPanel(o, roles) {
 
 // Preview puro HTML/CSS de un embed de Discord; sin llamada al backend.
 function renderEmbedPreview(e) {
-  if (!Object.keys(e).length) return emptyState('El preview aparece aquí a medida que completas el formulario.');
+  if (!Object.keys(e).length) return previewEmpty();
   const main = el('div', { class: 'd-embed-main' });
   if (e.author) {
     main.append(el('div', { class: 'd-embed-author' },
-      e.author.icon_url ? embedImg({ src: e.author.icon_url, alt: '' }) : null,
+      e.author.icon_url ? previewImg({ src: e.author.icon_url, alt: '' }) : null,
       e.author.name));
   }
   if (e.title) main.append(el('div', { class: 'd-embed-title' }, e.title));
@@ -1160,11 +1213,11 @@ function renderEmbedPreview(e) {
     main.append(grid);
   }
   const body = el('div', { class: 'd-embed-body' }, main);
-  if (e.thumbnail) body.append(el('div', { class: 'd-embed-thumb' }, embedImg({ src: e.thumbnail.url, alt: '' })));
-  if (e.image) body.append(el('div', { class: 'd-embed-image' }, embedImg({ src: e.image.url, alt: '' })));
+  if (e.thumbnail) body.append(el('div', { class: 'd-embed-thumb' }, previewImg({ src: e.thumbnail.url, alt: '' })));
+  if (e.image) body.append(el('div', { class: 'd-embed-image' }, previewImg({ src: e.image.url, alt: '' })));
   if (e.footer) {
     body.append(el('div', { class: 'd-embed-footer' },
-      e.footer.icon_url ? embedImg({ src: e.footer.icon_url, alt: '' }) : null,
+      e.footer.icon_url ? previewImg({ src: e.footer.icon_url, alt: '' }) : null,
       e.footer.text));
   }
   const color = typeof e.color === 'string' ? e.color : '#8B6EF5';
@@ -1175,7 +1228,7 @@ function renderEmbedPreview(e) {
 // Preview de todos los embeds del doc, apilados como los muestra Discord.
 function renderEmbedsPreview(dicts) {
   const nonEmpty = dicts.filter(d => Object.keys(d).length);
-  if (!nonEmpty.length) return emptyState('El preview aparece aquí a medida que completas el formulario.');
+  if (!nonEmpty.length) return previewEmpty();
   const stack = el('div', { class: 'd-embed-stack' });
   for (const d of nonEmpty) stack.append(renderEmbedPreview(d));
   return stack;
@@ -1233,7 +1286,9 @@ function renderClassicEditor(box, channels, roles) {
   const previewBox = el('div', {});
   function updatePreview() {
     previewBox.innerHTML = '';
+    beginPreviewRender();
     previewBox.append(renderEmbedsPreview(doc.embeds.map(embedDict)));
+    endPreviewRender();
     scheduleHistorySnapshot();
   }
 
@@ -1347,13 +1402,18 @@ function renderClassicEditor(box, channels, roles) {
   intervalInput.oninput = () => { doc.interval = intervalInput.value; };
   timeInput.oninput = () => { doc.time = timeInput.value; };
 
+  // Error de validación persistente sobre la barra de acciones (el toast se
+  // reserva para el resultado async de enviar/programar).
+  const alertBox = el('div', {});
+
   const sendBtn = el('button', {
     class: 'btn btn-primary',
     onclick: async () => {
       const dicts = docDicts(doc);
       const err = validateEmbedsClient(dicts);
-      if (err) { toast(err, 'err'); return; }
-      if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
+      if (err) { showFormAlert(alertBox, err); return; }
+      if (!chSel.value) { showFormAlert(alertBox, 'Elige un canal destino'); return; }
+      showFormAlert(alertBox, '');
       try {
         const sendOpts = sendOptsToApi(doc.sendOpts);
         if (modeSched.checked) {
@@ -1379,7 +1439,8 @@ function renderClassicEditor(box, channels, roles) {
     onclick: async () => {
       const dicts = docDicts(doc);
       const err = validateEmbedsClient(dicts);
-      if (err) { toast(err, 'err'); return; }
+      if (err) { showFormAlert(alertBox, err); return; }
+      showFormAlert(alertBox, '');
       const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
       if (!name) return;
       try {
@@ -1407,30 +1468,40 @@ function renderClassicEditor(box, channels, roles) {
 
   const form = el('div', { class: 'embed-form' },
     embedBar,
-    fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
-    fieldBlock('Descripción', insertWrap(
-      bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) }),
-      ['menciones', 'fecha', 'emoji'])),
-    fieldBlock('Color', bound('input', 'color', { type: 'color' })),
-    el('div', { class: 'embed-two' },
-      fieldBlock('Autor', insertWrap(
-        bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) }), ['emoji'])),
-      fieldBlock('Ícono del autor', imageField(s, 'authorIcon', updatePreview))),
-    el('div', { class: 'embed-two' },
-      fieldBlock('Footer', insertWrap(
-        bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) }), ['emoji'])),
-      fieldBlock('Ícono del footer', imageField(s, 'footerIcon', updatePreview))),
-    el('div', { class: 'embed-two' },
-      fieldBlock('Thumbnail', imageField(s, 'thumbnail', updatePreview, { gif: true })),
-      fieldBlock('Imagen grande', imageField(s, 'image', updatePreview, { gif: true }))),
-    el('div', { class: 'field' }, el('label', {}, 'Fields'), fieldsBox, addFieldBtn),
-    el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
-    el('div', { class: 'field' },
-      el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
-      el('label', { class: 'toggle' }, modeSched, 'Programar'),
-      schedControls),
-    sendOptionsPanel(doc.sendOpts, roles),
-    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn, histBtn, jsonBtn));
+    formGroup('Cuerpo',
+      fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
+      fieldBlock('Descripción', insertWrap(
+        bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) }),
+        ['menciones', 'fecha', 'emoji'])),
+      fieldBlock('Color', bound('input', 'color', { type: 'color' }))),
+    formGroup('Autor',
+      el('div', { class: 'embed-two' },
+        fieldBlock('Nombre', insertWrap(
+          bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) }), ['emoji'])),
+        fieldBlock('Ícono del autor', imageField(s, 'authorIcon', updatePreview)))),
+    formGroup('Imágenes',
+      el('div', { class: 'embed-two' },
+        fieldBlock('Thumbnail', imageField(s, 'thumbnail', updatePreview, { gif: true })),
+        fieldBlock('Imagen grande', imageField(s, 'image', updatePreview, { gif: true })))),
+    formGroup('Footer',
+      el('div', { class: 'embed-two' },
+        fieldBlock('Texto', insertWrap(
+          bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) }), ['emoji'])),
+        fieldBlock('Ícono del footer', imageField(s, 'footerIcon', updatePreview)))),
+    formGroup('Fields',
+      el('div', { class: 'field' }, fieldsBox, addFieldBtn)),
+    formGroup('Destino y envío',
+      el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
+      el('div', { class: 'field' },
+        el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
+        el('label', { class: 'toggle' }, modeSched, 'Programar'),
+        schedControls),
+      sendOptionsPanel(doc.sendOpts, roles)),
+    alertBox,
+    el('div', { class: 'embed-actions' },
+      sendBtn, saveBtn, clearBtn,
+      el('span', { class: 'embed-actions-spacer' }),
+      histBtn, jsonBtn));
 
   box.append(el('div', { class: 'embed-layout' },
     form,
@@ -1602,6 +1673,12 @@ function renderBlocks(listEl, blocks, inContainer, onChange, roles) {
     typeCounts[b.type] = (typeCounts[b.type] || 0) + 1;
     listEl.append(renderBlockCard(listEl, blocks, i, typeCounts[b.type], inContainer, onChange, roles));
   });
+  // Outline recién iniciado: invitar a agregar el primer bloque en vez de una
+  // lista vacía sin indicación.
+  if (!blocks.length && !inContainer) {
+    listEl.append(el('div', { class: 'outline-empty' },
+      'Todavía no hay bloques. Agregá el primero con los botones de abajo.'));
+  }
   const adder = el('div', { class: 'add-row layout-adder' });
   const atMax = componentCount(_layoutDoc ? _layoutDoc.blocks : blocks) >= LAYOUT_MAX_COMPONENTS;
   const types = [['text', '+ Texto'], ['section', '+ Sección'], ['media_gallery', '+ Galería'],
@@ -1771,7 +1848,7 @@ function renderBlockForm(b, onChange, roles) {
 
 // Preview anidado de un layout (bloques ya en formato API).
 function renderLayoutPreview(blocks) {
-  if (!blocks.length) return emptyState('Agrega bloques para ver el preview.');
+  if (!blocks.length) return previewEmpty('Agrega bloques para ver tu mensaje');
   const wrap = el('div', { class: 'lv2-preview' });
   for (const b of blocks) wrap.append(renderPreviewBlock(b));
   return wrap;
@@ -1796,13 +1873,13 @@ function renderPreviewBlock(b) {
   if (b.type === 'section') {
     const texts = el('div', { class: 'lv2-section-texts' }, b.texts.map(t => el('div', { class: 'lv2-text' }, t)));
     let acc;
-    if (b.accessory.type === 'thumbnail') acc = b.accessory.url ? embedImg({ src: b.accessory.url, alt: '', class: 'lv2-thumb' }) : null;
+    if (b.accessory.type === 'thumbnail') acc = b.accessory.url ? previewImg({ src: b.accessory.url, alt: '', class: 'lv2-thumb' }) : null;
     else acc = lv2Button(b.accessory);
     return el('div', { class: 'lv2-section' }, texts, el('div', { class: 'lv2-accessory' }, acc));
   }
   if (b.type === 'media_gallery') {
     const grid = el('div', { class: 'lv2-gallery' });
-    for (const it of b.items) if (it.url) grid.append(embedImg({ src: it.url, alt: it.description || '' }));
+    for (const it of b.items) if (it.url) grid.append(previewImg({ src: it.url, alt: it.description || '' }));
     return grid;
   }
   if (b.type === 'separator') return el('div', { class: 'lv2-sep' + (b.visible ? ' visible' : '') });
@@ -1821,7 +1898,9 @@ function renderLayoutEditor(box, channels, roles) {
   const previewBox = el('div', {});
   function updatePreview() {
     previewBox.innerHTML = '';
+    beginPreviewRender();
     previewBox.append(renderLayoutPreview(doc.blocks.map(blockToApi)));
+    endPreviewRender();
     scheduleHistorySnapshot();
   }
 
@@ -1852,11 +1931,14 @@ function renderLayoutEditor(box, channels, roles) {
   intervalInput.oninput = () => { doc.interval = intervalInput.value; };
   timeInput.oninput = () => { doc.time = timeInput.value; };
 
+  const alertBox = el('div', {});
+
   const sendBtn = el('button', {
     class: 'btn btn-primary',
     onclick: async () => {
-      if (!doc.blocks.length) { toast('Agrega al menos un bloque', 'err'); return; }
-      if (!chSel.value) { toast('Elige un canal destino', 'err'); return; }
+      if (!doc.blocks.length) { showFormAlert(alertBox, 'Agrega al menos un bloque'); return; }
+      if (!chSel.value) { showFormAlert(alertBox, 'Elige un canal destino'); return; }
+      showFormAlert(alertBox, '');
       const layout = { blocks: doc.blocks.map(blockToApi) };
       try {
         const sendOpts = sendOptsToApi(doc.sendOpts);
@@ -1877,7 +1959,8 @@ function renderLayoutEditor(box, channels, roles) {
   const saveBtn = el('button', {
     class: 'btn btn-secondary',
     onclick: async () => {
-      if (!doc.blocks.length) { toast('Agrega al menos un bloque', 'err'); return; }
+      if (!doc.blocks.length) { showFormAlert(alertBox, 'Agrega al menos un bloque'); return; }
+      showFormAlert(alertBox, '');
       const layout = { blocks: doc.blocks.map(blockToApi) };
       const name = (prompt('Nombre de la plantilla:', doc.templateName || '') || '').trim();
       if (!name) return;
@@ -1901,14 +1984,20 @@ function renderLayoutEditor(box, channels, roles) {
   const jsonBtn = el('button', { class: 'btn btn-secondary', onclick: openJsonModal }, 'Ver/editar JSON');
 
   const form = el('div', { class: 'embed-form' },
-    el('div', { class: 'field' }, el('label', {}, 'Bloques'), blocksList),
-    el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
-    el('div', { class: 'field' },
-      el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
-      el('label', { class: 'toggle' }, modeSched, 'Programar'),
-      schedControls),
-    sendOptionsPanel(doc.sendOpts, roles),
-    el('div', { class: 'add-row' }, sendBtn, saveBtn, clearBtn, histBtn, jsonBtn));
+    formGroup('Bloques',
+      el('div', { class: 'field' }, blocksList)),
+    formGroup('Destino y envío',
+      el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
+      el('div', { class: 'field' },
+        el('label', { class: 'toggle' }, modeNow, 'Enviar ahora'),
+        el('label', { class: 'toggle' }, modeSched, 'Programar'),
+        schedControls),
+      sendOptionsPanel(doc.sendOpts, roles)),
+    alertBox,
+    el('div', { class: 'embed-actions' },
+      sendBtn, saveBtn, clearBtn,
+      el('span', { class: 'embed-actions-spacer' }),
+      histBtn, jsonBtn));
 
   box.append(el('div', { class: 'embed-layout' },
     form,
