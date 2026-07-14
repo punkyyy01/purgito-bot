@@ -79,6 +79,87 @@ textarea:focus-visible {
   }
 }
 
+/* ---------- Scrollbars propias ----------
+   Delgada y discreta en vez de la barra gris del sistema, aplicada a TODO
+   contenedor con scroll propio del panel: sidebar, .content (y por lo
+   tanto cualquier sección que solo crece ahí — Corpus, Reacciones, Frases,
+   GIFs, Premium, etc., no necesitan selector propio), el par independiente
+   formulario/Preview de Embeds (el outline de bloques de Layout V2 vive
+   adentro de .embed-form, así que queda cubierto sin selector aparte),
+   textareas largas (descripción, TextDisplay, editor JSON), modal
+   (historial/JSON) y los popovers de inserción (menciones/emoji).
+
+   No la escondemos (scrollbar-width: none): "thin" ya la vuelve angosta y
+   sigue siendo la pista de "hay más contenido" sin necesitar además un
+   degradado en el borde — ver nota en el reporte de este cambio.
+
+   select[multiple] es la única lista <select> real (roles, Fase 5): un
+   <select> de una sola línea abre un popup nativo del sistema operativo
+   que ningún navegador deja estilizar por CSS, fuera de alcance.
+
+   Selector combinado una sola vez por regla en vez de repetir el bloque
+   completo de estilos por cada componente. */
+#catNav,
+.content,
+.embed-form,
+.d-embed-wrap,
+.modal-box,
+.ins-pop-list,
+.ins-emoji-grid,
+textarea,
+select[multiple] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+#catNav::-webkit-scrollbar,
+.content::-webkit-scrollbar,
+.embed-form::-webkit-scrollbar,
+.d-embed-wrap::-webkit-scrollbar,
+.modal-box::-webkit-scrollbar,
+.ins-pop-list::-webkit-scrollbar,
+.ins-emoji-grid::-webkit-scrollbar,
+textarea::-webkit-scrollbar,
+select[multiple]::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+#catNav::-webkit-scrollbar-track,
+.content::-webkit-scrollbar-track,
+.embed-form::-webkit-scrollbar-track,
+.d-embed-wrap::-webkit-scrollbar-track,
+.modal-box::-webkit-scrollbar-track,
+.ins-pop-list::-webkit-scrollbar-track,
+.ins-emoji-grid::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track,
+select[multiple]::-webkit-scrollbar-track {
+  background: transparent;
+}
+#catNav::-webkit-scrollbar-thumb,
+.content::-webkit-scrollbar-thumb,
+.embed-form::-webkit-scrollbar-thumb,
+.d-embed-wrap::-webkit-scrollbar-thumb,
+.modal-box::-webkit-scrollbar-thumb,
+.ins-pop-list::-webkit-scrollbar-thumb,
+.ins-emoji-grid::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb,
+select[multiple]::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+#catNav::-webkit-scrollbar-thumb:hover,
+.content::-webkit-scrollbar-thumb:hover,
+.embed-form::-webkit-scrollbar-thumb:hover,
+.d-embed-wrap::-webkit-scrollbar-thumb:hover,
+.modal-box::-webkit-scrollbar-thumb:hover,
+.ins-pop-list::-webkit-scrollbar-thumb:hover,
+.ins-emoji-grid::-webkit-scrollbar-thumb:hover,
+textarea::-webkit-scrollbar-thumb:hover,
+select[multiple]::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent);
+}
+
 /* ---------- Botones, inputs ---------- */
 
 .btn {
