@@ -904,6 +904,17 @@ h1 {
   color: #B5BAC1;
   font-weight: 400;
 }
+.d-embed-link { color: #00AFF4; text-decoration: none; cursor: pointer; }
+.d-embed-link:hover { text-decoration: underline; }
+.d-embed-subtext { display: block; font-size: 0.85em; color: #949BA4; margin-top: 2px; white-space: pre-wrap; }
+.d-embed-h { display: block; font-weight: 700; line-height: 1.3; margin: 4px 0 2px; color: #F2F3F5; }
+.d-embed-h1 { font-size: 1.4em; }
+.d-embed-h2 { font-size: 1.25em; }
+.d-embed-h3 { font-size: 1.1em; }
+.d-embed-list { margin: 2px 0; padding-left: 22px; }
+.d-embed-list li { margin: 2px 0; }
+.d-embed-emoji { width: 1.375em; height: 1.375em; vertical-align: -0.3em; object-fit: contain; }
+.d-embed-timestamp { background: rgba(255, 255, 255, 0.06); border-radius: 3px; padding: 0 2px; }
 
 .tpl-dot {
   width: 12px;

@@ -647,11 +647,76 @@ function resolveMentionNode(kind, id) {
   return el('span', { class: 'd-embed-mention' }, '@usuario');
 }
 
-// Formato inline: código, spoiler, negrita+cursiva, negrita, subrayado,
-// tachado, cursiva (* o _), y las tres menciones. El orden de la alternancia
-// importa (más específico primero: ***, luego **, luego *) para que la
-// regex no confunda negrita con cursiva.
-const MD_INLINE_RE = /`([^`\n]+?)`|\|\|([\s\S]+?)\|\||\*\*\*([\s\S]+?)\*\*\*|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\*([^*\n]+?)\*|_([^_\n]+?)_|<@&(\d+)>|<#(\d+)>|<@!?(\d+)>/g;
+// Emoji custom <:nombre:id> / animado <a:nombre:id>: el ID ya trae todo lo
+// necesario para construir la URL del CDN de Discord sin pedirle nada al
+// backend. Si la imagen no carga (emoji borrado, CDN caído), se cae a
+// :nombre: en vez de dejar un ícono roto.
+function customEmojiNode(name, id, animated) {
+  const fallback = ':' + name + ':';
+  const img = el('img', {
+    src: `https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}?size=24&quality=lossless`,
+    alt: fallback, class: 'd-embed-emoji',
+  });
+  img.onerror = () => { img.replaceWith(document.createTextNode(fallback)); };
+  return img;
+}
+
+// Formato de <t:unix:estilo>, compartido con el picker de fecha (5.1) para
+// no duplicar la lógica de Intl.DateTimeFormat/RelativeTimeFormat.
+function discordTimestampText(date, style) {
+  const s = style || 'f';
+  if (s === 'R') {
+    const sec = Math.round((date - Date.now()) / 1000);
+    const rtf = new Intl.RelativeTimeFormat('es');
+    const abs = Math.abs(sec);
+    if (abs < 60) return rtf.format(sec, 'second');
+    if (abs < 3600) return rtf.format(Math.round(sec / 60), 'minute');
+    if (abs < 86400) return rtf.format(Math.round(sec / 3600), 'hour');
+    return rtf.format(Math.round(sec / 86400), 'day');
+  }
+  const opts = {
+    t: { timeStyle: 'short' }, T: { timeStyle: 'medium' },
+    d: { dateStyle: 'short' }, D: { dateStyle: 'long' },
+    f: { dateStyle: 'long', timeStyle: 'short' }, F: { dateStyle: 'full', timeStyle: 'short' },
+  }[s] || { dateStyle: 'long', timeStyle: 'short' };
+  return new Intl.DateTimeFormat('es', opts).format(date);
+}
+
+// Solo esquemas seguros son clickeables; una URL rara (p.ej. "javascript:")
+// se muestra igual con el estilo de link pero sin href, para no correr JS
+// arbitrario desde una plantilla pegada/importada.
+function mdLinkNode(text, url) {
+  const attrs = { class: 'd-embed-link', title: url };
+  if (/^(https?:|mailto:)/i.test(url)) {
+    attrs.href = url; attrs.target = '_blank'; attrs.rel = 'noopener noreferrer';
+  }
+  return el('a', attrs, ...parseInline(text));
+}
+
+// Formato inline completo: escape, código, links enmascarados, spoiler,
+// negrita+cursiva, negrita, subrayado, tachado, cursiva (* o _), las tres
+// menciones, emoji custom y timestamps. Grupos con nombre en vez de índices
+// numéricos: agregar una alternativa no corre el riesgo de desalinear el
+// resto. El orden de la alternancia importa (más específico primero: ***
+// antes que **, ** antes que *) para que la regex no confunda negrita con
+// cursiva.
+const MD_INLINE_RE = new RegExp([
+  String.raw`\\(?<esc>[\s\S])`,
+  String.raw`\x60(?<code>[^\x60\n]+?)\x60`,
+  String.raw`\[(?<linktext>[^\[\]]+)\]\((?<linkurl>(?:[^()\s]|\([^()\s]*\))+)\)`,
+  String.raw`\|\|(?<spoiler>[\s\S]+?)\|\|`,
+  String.raw`\*\*\*(?<bi>[\s\S]+?)\*\*\*`,
+  String.raw`\*\*(?<bold>[\s\S]+?)\*\*`,
+  String.raw`__(?<under>[\s\S]+?)__`,
+  String.raw`~~(?<strike>[\s\S]+?)~~`,
+  String.raw`\*(?<italic1>[^*\n]+?)\*`,
+  String.raw`_(?<italic2>[^_\n]+?)_`,
+  String.raw`<@&(?<role>\d+)>`,
+  String.raw`<#(?<channel>\d+)>`,
+  String.raw`<@!?(?<user>\d+)>`,
+  String.raw`<(?<emojia>a)?:(?<emojiname>[a-zA-Z0-9_]{2,32}):(?<emojiid>\d+)>`,
+  String.raw`<t:(?<ts>-?\d+)(?::(?<tstyle>[tTdDfFR]))?>`,
+].join('|'), 'g');
 
 function parseInline(text) {
   const nodes = [];
@@ -659,47 +724,141 @@ function parseInline(text) {
   let last = 0, m;
   while ((m = re.exec(text))) {
     if (m.index > last) nodes.push(document.createTextNode(text.slice(last, m.index)));
-    if (m[1] !== undefined) nodes.push(el('code', { class: 'd-embed-code' }, m[1]));
-    else if (m[2] !== undefined) nodes.push(el('span', { class: 'd-embed-spoiler' }, ...parseInline(m[2])));
-    else if (m[3] !== undefined) nodes.push(el('strong', {}, el('em', {}, ...parseInline(m[3]))));
-    else if (m[4] !== undefined) nodes.push(el('strong', {}, ...parseInline(m[4])));
-    else if (m[5] !== undefined) nodes.push(el('u', {}, ...parseInline(m[5])));
-    else if (m[6] !== undefined) nodes.push(el('s', {}, ...parseInline(m[6])));
-    else if (m[7] !== undefined) nodes.push(el('em', {}, ...parseInline(m[7])));
-    else if (m[8] !== undefined) nodes.push(el('em', {}, ...parseInline(m[8])));
-    else if (m[9] !== undefined) nodes.push(resolveMentionNode('role', m[9]));
-    else if (m[10] !== undefined) nodes.push(resolveMentionNode('channel', m[10]));
-    else if (m[11] !== undefined) nodes.push(resolveMentionNode('user', m[11]));
+    const g = m.groups;
+    if (g.esc !== undefined) nodes.push(document.createTextNode(g.esc));
+    else if (g.code !== undefined) nodes.push(el('code', { class: 'd-embed-code' }, g.code));
+    else if (g.linktext !== undefined) nodes.push(mdLinkNode(g.linktext, g.linkurl));
+    else if (g.spoiler !== undefined) nodes.push(el('span', { class: 'd-embed-spoiler' }, ...parseInline(g.spoiler)));
+    else if (g.bi !== undefined) nodes.push(el('strong', {}, el('em', {}, ...parseInline(g.bi))));
+    else if (g.bold !== undefined) nodes.push(el('strong', {}, ...parseInline(g.bold)));
+    else if (g.under !== undefined) nodes.push(el('u', {}, ...parseInline(g.under)));
+    else if (g.strike !== undefined) nodes.push(el('s', {}, ...parseInline(g.strike)));
+    else if (g.italic1 !== undefined) nodes.push(el('em', {}, ...parseInline(g.italic1)));
+    else if (g.italic2 !== undefined) nodes.push(el('em', {}, ...parseInline(g.italic2)));
+    else if (g.role !== undefined) nodes.push(resolveMentionNode('role', g.role));
+    else if (g.channel !== undefined) nodes.push(resolveMentionNode('channel', g.channel));
+    else if (g.user !== undefined) nodes.push(resolveMentionNode('user', g.user));
+    else if (g.emojiid !== undefined) nodes.push(customEmojiNode(g.emojiname, g.emojiid, !!g.emojia));
+    else if (g.ts !== undefined) {
+      const date = new Date(parseInt(g.ts, 10) * 1000);
+      nodes.push(el('span', { class: 'd-embed-timestamp' }, discordTimestampText(date, g.tstyle)));
+    }
     last = re.lastIndex;
+    if (re.lastIndex === m.index) re.lastIndex++; // salvaguarda anti bucle infinito
   }
   if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
   return nodes;
 }
 
-// Bloques: agrupa líneas consecutivas que empiezan con "> " en una cita;
-// el resto pasa por el formato inline. Los saltos de línea sobrantes los
-// resuelve el white-space:pre-wrap ya usado en .d-embed-desc/.lv2-text.
+// Reconoce si una línea abre un bloque especial (cita, subtexto, encabezado,
+// lista) — usado para saber cuándo cortar la acumulación de un párrafo llano.
+function isBlockLine(line) {
+  return /^>\s?/.test(line) || /^-#\s?/.test(line) || /^#{1,3}\s+/.test(line) ||
+         /^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line);
+}
+
+// Lista (no ordenada u ordenada) con sangría visual: Discord no dibuja
+// bullets/viñetas distintas por nivel, solo corre la línea entera hacia la
+// derecha, así que la sangría se resuelve con margin-left por ítem en vez de
+// listas anidadas de verdad.
+function buildList(items, ordered) {
+  const attrs = { class: 'd-embed-list' };
+  if (ordered) attrs.start = String(items[0].num);
+  const list = el(ordered ? 'ol' : 'ul', attrs);
+  const base = items[0].indent;
+  for (const it of items) {
+    const level = Math.max(0, Math.round((it.indent - base) / 2));
+    const li = el('li', {}, ...parseInline(it.content));
+    if (level > 0) li.style.marginLeft = (level * 18) + 'px';
+    list.append(li);
+  }
+  return list;
+}
+
+// Bloques: cita de una o más líneas ("> "), cita de bloque completo hasta el
+// final del tramo (">>> "), subtexto ("-# "), encabezados (#/##/###) y
+// listas (-/* , 1.) con su sangría; el resto pasa por el formato inline. Los
+// saltos de línea sobrantes los resuelve el white-space:pre-wrap ya usado en
+// .d-embed-desc/.lv2-text.
 function mdBlocksFromText(chunk) {
   if (!chunk) return [];
   const lines = chunk.split('\n');
   const out = [];
   let i = 0;
   while (i < lines.length) {
-    if (/^>\s?/.test(lines[i])) {
+    const line = lines[i];
+
+    // ">>> " citas todo lo que sigue hasta el final del tramo, no solo esa línea.
+    const tripleM = /^>>>\s?/.exec(line);
+    if (tripleM) {
+      const rest = [line.slice(tripleM[0].length), ...lines.slice(i + 1)].join('\n');
+      out.push(el('div', { class: 'd-embed-quote' }, ...parseInline(rest)));
+      i = lines.length;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
       const quote = el('div', { class: 'd-embed-quote' });
       let first = true;
-      while (i < lines.length && /^>\s?/.test(lines[i])) {
+      while (i < lines.length && /^>\s?/.test(lines[i]) && !/^>>>\s?/.test(lines[i])) {
         if (!first) quote.append(document.createTextNode('\n'));
         quote.append(...parseInline(lines[i].replace(/^>\s?/, '')));
         first = false;
         i++;
       }
       out.push(quote);
-    } else {
-      const plain = [];
-      while (i < lines.length && !/^>\s?/.test(lines[i])) { plain.push(lines[i]); i++; }
-      out.push(...parseInline(plain.join('\n')));
+      continue;
     }
+
+    if (/^-#\s?/.test(line)) {
+      const sub = el('div', { class: 'd-embed-subtext' });
+      let first = true;
+      while (i < lines.length && /^-#\s?/.test(lines[i])) {
+        if (!first) sub.append(document.createTextNode('\n'));
+        sub.append(...parseInline(lines[i].replace(/^-#\s?/, '')));
+        first = false;
+        i++;
+      }
+      out.push(sub);
+      continue;
+    }
+
+    const headM = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (headM) {
+      out.push(el('div', { class: 'd-embed-h d-embed-h' + headM[1].length }, ...parseInline(headM[2])));
+      i++;
+      continue;
+    }
+
+    const ulFirst = /^(\s*)[-*]\s+(.*)$/.exec(line);
+    if (ulFirst) {
+      const items = [];
+      while (i < lines.length) {
+        const mm = /^(\s*)[-*]\s+(.*)$/.exec(lines[i]);
+        if (!mm) break;
+        items.push({ indent: mm[1].length, content: mm[2] });
+        i++;
+      }
+      out.push(buildList(items, false));
+      continue;
+    }
+
+    const olFirst = /^(\s*)(\d+)\.\s+(.*)$/.exec(line);
+    if (olFirst) {
+      const items = [];
+      while (i < lines.length) {
+        const mm = /^(\s*)(\d+)\.\s+(.*)$/.exec(lines[i]);
+        if (!mm) break;
+        items.push({ indent: mm[1].length, num: parseInt(mm[2], 10), content: mm[3] });
+        i++;
+      }
+      out.push(buildList(items, true));
+      continue;
+    }
+
+    const plain = [];
+    while (i < lines.length && !isBlockLine(lines[i])) { plain.push(lines[i]); i++; }
+    out.push(...parseInline(plain.join('\n')));
   }
   return out;
 }
@@ -909,23 +1068,8 @@ function openInsertPopover(anchor, input, tabs, initialTab) {
         ['D', 'Fecha larga'], ['f', 'Fecha y hora'], ['F', 'Fecha y hora completa'],
         ['R', 'Relativo (hace / en…)'],
       ];
-      function tsPreview(date, style) {
-        if (style === 'R') {
-          const s = Math.round((date - Date.now()) / 1000);
-          const rtf = new Intl.RelativeTimeFormat('es');
-          const abs = Math.abs(s);
-          if (abs < 60) return rtf.format(s, 'second');
-          if (abs < 3600) return rtf.format(Math.round(s / 60), 'minute');
-          if (abs < 86400) return rtf.format(Math.round(s / 3600), 'hour');
-          return rtf.format(Math.round(s / 86400), 'day');
-        }
-        const opts = {
-          t: { timeStyle: 'short' }, T: { timeStyle: 'medium' },
-          d: { dateStyle: 'short' }, D: { dateStyle: 'long' },
-          f: { dateStyle: 'long', timeStyle: 'short' }, F: { dateStyle: 'full', timeStyle: 'short' },
-        }[style];
-        return new Intl.DateTimeFormat('es', opts).format(date);
-      }
+      // El formato en sí (Intl.DateTimeFormat/RelativeTimeFormat) vive en
+      // discordTimestampText, compartido con el renderer del Preview.
       function renderStyles() {
         const date = dt.value ? new Date(dt.value) : new Date();
         list.innerHTML = '';
@@ -935,7 +1079,7 @@ function openInsertPopover(anchor, input, tabs, initialTab) {
             onclick: (ev) => insert(`<t:${Math.floor(date.getTime() / 1000)}:${code}>`, ev),
           },
             el('span', { class: 'ins-item-label' }, label),
-            el('span', { class: 'dim' }, tsPreview(date, code))));
+            el('span', { class: 'dim' }, discordTimestampText(date, code))));
         }
       }
       dt.onchange = renderStyles;
