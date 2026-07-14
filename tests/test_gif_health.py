@@ -1,0 +1,227 @@
+"""Tests del chequeo de salud de GIFs guardados (r2.check_gif_url_health +
+db.record_gif_health_check): distinguir un link genuinamente muerto (404/410,
+content-type inválido) de uno que el navegador no puede previsualizar por
+hotlink protection pero que a Discord le sigue funcionando -- no hay que
+confundir eso último con "roto" y borrarlo.
+
+check_gif_url_health nunca debe mandar un Referer de navegador (por eso no
+usa `requests.Session` con referer seteado): así se comporta parecido a como
+Discord desempaqueta el link, no a un <img> de página.
+
+record_gif_health_check solo borra tras 2 'dead' seguidos -- una caída
+puntual del host (timeout aislado) no debe tirar un GIF válido.
+Usa una DB SQLite en memoria inyectada en db._db, sin tocar data/bot.db.
+"""
+
+import asyncio
+from types import SimpleNamespace
+
+import aiosqlite
+import pytest
+
+import db
+import r2
+
+_GUILD = 1
+
+
+@pytest.fixture
+def memory_db(monkeypatch):
+    conn = asyncio.run(_open_memory_db())
+    monkeypatch.setattr(db, "_db", conn)
+    monkeypatch.setattr(r2, "delete_url", _noop_delete_url)
+    yield conn
+    asyncio.run(conn.close())
+
+
+async def _noop_delete_url(url):
+    return None
+
+
+async def _open_memory_db() -> aiosqlite.Connection:
+    conn = await aiosqlite.connect(":memory:")
+    await conn.executescript(db.SCHEMA)
+    await conn.commit()
+    return conn
+
+
+async def _insert_gif(conn, guild_id, url) -> int:
+    cur = await conn.execute(
+        "INSERT INTO corpus_gifs (guild_id, url) VALUES (?, ?)", (guild_id, url)
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def _row(conn, gif_id):
+    cur = await conn.execute(
+        "SELECT last_health_check, checked_at, dead_streak FROM corpus_gifs WHERE id=?",
+        (gif_id,),
+    )
+    return await cur.fetchone()
+
+
+# ---------- r2.check_gif_url_health ----------
+
+
+class _FakeResp:
+    def __init__(self, status_code, content_type=None):
+        self.status_code = status_code
+        self.headers = {"Content-Type": content_type} if content_type else {}
+
+    def close(self):
+        pass
+
+
+def test_health_ok_on_200_with_valid_content_type(monkeypatch):
+    monkeypatch.setattr(
+        r2.requests, "head", lambda *a, **k: _FakeResp(200, "image/gif")
+    )
+    assert r2.check_gif_url_health("https://example.com/x.gif") == "ok"
+
+
+def test_health_dead_on_404(monkeypatch):
+    monkeypatch.setattr(r2.requests, "head", lambda *a, **k: _FakeResp(404))
+    assert r2.check_gif_url_health("https://example.com/gone.gif") == "dead"
+
+
+def test_health_dead_on_410(monkeypatch):
+    monkeypatch.setattr(r2.requests, "head", lambda *a, **k: _FakeResp(410))
+    assert r2.check_gif_url_health("https://example.com/gone.gif") == "dead"
+
+
+def test_health_dead_on_invalid_content_type(monkeypatch):
+    # 200 pero devuelve una página HTML de error -- no es un medio válido.
+    monkeypatch.setattr(
+        r2.requests, "head", lambda *a, **k: _FakeResp(200, "text/html")
+    )
+    assert r2.check_gif_url_health("https://example.com/x.gif") == "dead"
+
+
+def test_health_unreachable_on_timeout(monkeypatch):
+    def raise_timeout(*a, **k):
+        raise r2.requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr(r2.requests, "head", raise_timeout)
+    assert r2.check_gif_url_health("https://example.com/x.gif") == "unreachable"
+
+
+def test_health_falls_back_to_get_when_head_unsupported(monkeypatch):
+    calls = []
+
+    def fake_head(*a, **k):
+        calls.append("head")
+        return _FakeResp(405)
+
+    def fake_get(*a, **k):
+        calls.append("get")
+        return _FakeResp(200, "image/gif")
+
+    monkeypatch.setattr(r2.requests, "head", fake_head)
+    monkeypatch.setattr(r2.requests, "get", fake_get)
+    assert r2.check_gif_url_health("https://example.com/x.gif") == "ok"
+    assert calls == ["head", "get"]
+
+
+def test_health_no_referer_header_sent(monkeypatch):
+    """No debe mandar Referer: es justamente lo que evita que un host con
+    hotlink protection lo bloquee como bloquearía a un navegador."""
+    seen = {}
+
+    def fake_head(url, headers=None, **k):
+        seen["headers"] = headers or {}
+        return _FakeResp(200, "image/gif")
+
+    monkeypatch.setattr(r2.requests, "head", fake_head)
+    r2.check_gif_url_health("https://example.com/x.gif")
+    assert "Referer" not in seen["headers"]
+
+
+# ---------- db.record_gif_health_check ----------
+
+
+def test_ok_resets_streak_and_keeps_gif(memory_db):
+    async def run():
+        gid = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        deleted = await db.record_gif_health_check(gid, "ok")
+        assert deleted is False
+        row = await _row(memory_db, gid)
+        assert row == ("ok", row[1], 0)
+
+    asyncio.run(run())
+
+
+def test_single_dead_does_not_delete(memory_db):
+    """Una sola confirmación 'dead' no alcanza -- podría ser el host caído
+    30 segundos, no un link roto de verdad."""
+
+    async def run():
+        gid = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        deleted = await db.record_gif_health_check(gid, "dead")
+        assert deleted is False
+        row = await _row(memory_db, gid)
+        assert row == ("dead", row[1], 1)
+        cur = await memory_db.execute(
+            "SELECT COUNT(*) FROM corpus_gifs WHERE id=?", (gid,)
+        )
+        assert (await cur.fetchone())[0] == 1
+
+    asyncio.run(run())
+
+
+def test_two_consecutive_dead_deletes(memory_db):
+    async def run():
+        gid = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        assert await db.record_gif_health_check(gid, "dead") is False
+        assert await db.record_gif_health_check(gid, "dead") is True
+        cur = await memory_db.execute(
+            "SELECT COUNT(*) FROM corpus_gifs WHERE id=?", (gid,)
+        )
+        assert (await cur.fetchone())[0] == 0
+
+    asyncio.run(run())
+
+
+def test_unreachable_does_not_count_toward_dead_streak(memory_db):
+    """dead, unreachable, dead -- el 'unreachable' del medio no debe sumar
+    (ni resetear) el streak: solo dos 'dead' SEGUIDOS deben borrar."""
+
+    async def run():
+        gid = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        assert await db.record_gif_health_check(gid, "dead") is False
+        assert await db.record_gif_health_check(gid, "unreachable") is False
+        row = await _row(memory_db, gid)
+        assert row[2] == 1  # streak sigue en 1, no se resetea ni se pierde
+        assert await db.record_gif_health_check(gid, "dead") is True
+
+    asyncio.run(run())
+
+
+def test_ok_after_dead_resets_streak(memory_db):
+    async def run():
+        gid = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        assert await db.record_gif_health_check(gid, "dead") is False
+        assert await db.record_gif_health_check(gid, "ok") is False
+        # Vuelve a fallar una vez: no debería borrar porque el streak se reseteó.
+        assert await db.record_gif_health_check(gid, "dead") is False
+        row = await _row(memory_db, gid)
+        assert row[2] == 1
+
+    asyncio.run(run())
+
+
+def test_get_gifs_for_health_check_prioritizes_never_checked_and_oldest(memory_db):
+    async def run():
+        a = await _insert_gif(memory_db, _GUILD, "https://example.com/a.gif")
+        b = await _insert_gif(memory_db, _GUILD, "https://example.com/b.gif")
+        c = await _insert_gif(memory_db, _GUILD, "https://example.com/c.gif")
+        # b ya fue chequeado (tiene checked_at); a y c nunca.
+        await db.record_gif_health_check(b, "ok")
+
+        gifs = await db.get_gifs_for_health_check(_GUILD, limit=10)
+        ids = [g["id"] for g in gifs]
+        # a y c (nunca chequeados) deben ir antes que b (ya chequeado).
+        assert ids.index(b) > ids.index(a)
+        assert ids.index(b) > ids.index(c)
+
+    asyncio.run(run())

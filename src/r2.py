@@ -143,6 +143,43 @@ def is_url_alive(url: str, timeout: float = 4.0) -> bool:
         return False
 
 
+_VALID_MEDIA_CONTENT_TYPES = ("image/", "video/")
+
+
+def check_gif_url_health(url: str, timeout: float = 6.0) -> str:
+    """Chequea un GIF guardado para la galería del panel: "ok" / "dead" /
+    "unreachable". A propósito NO manda un header Referer de navegador, para
+    comportarse lo más parecido posible a cómo Discord lo desempaqueta (a
+    diferencia de un <img> de navegador, que sí manda el Referer que activa
+    la protección anti-hotlink de muchos hosts de GIFs).
+
+    "dead": el link está confirmado roto (404/410, o un Content-Type que no
+    es de imagen/video) -- esto también le va a fallar a Discord.
+    "unreachable": fallo de red o timeout puntual, no alcanza para asegurar
+    que el link esté muerto (podría ser una caída transitoria del host).
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
+    try:
+        resp = requests.head(
+            url, headers=headers, timeout=timeout, allow_redirects=True
+        )
+        if resp.status_code == 405 or not resp.headers.get("Content-Type"):
+            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            resp.close()
+    except Exception:
+        return "unreachable"
+
+    if resp.status_code in (404, 410):
+        return "dead"
+    if resp.status_code != 200:
+        return "unreachable"
+
+    content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if content_type.startswith(_VALID_MEDIA_CONTENT_TYPES):
+        return "ok"
+    return "dead"
+
+
 async def delete_url(url: str) -> None:
     """Borra un objeto de R2 si la URL le pertenece. No-op para URLs externas."""
     pub = public_url()

@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS corpus_gifs (
     guild_id INTEGER NOT NULL,
     url TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    media_url TEXT,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    last_health_check TEXT,
+    checked_at TEXT,
+    dead_streak INTEGER NOT NULL DEFAULT 0,
     UNIQUE(guild_id, url)
 );
 
@@ -240,6 +245,23 @@ async def init_db():
         await _db.commit()
     except Exception:
         log.debug("Columna fail_count ya existe en corpus_gifs")
+    try:
+        await _db.execute("ALTER TABLE corpus_gifs ADD COLUMN last_health_check TEXT")
+        await _db.commit()
+    except Exception:
+        log.debug("Columna last_health_check ya existe en corpus_gifs")
+    try:
+        await _db.execute("ALTER TABLE corpus_gifs ADD COLUMN checked_at TEXT")
+        await _db.commit()
+    except Exception:
+        log.debug("Columna checked_at ya existe en corpus_gifs")
+    try:
+        await _db.execute(
+            "ALTER TABLE corpus_gifs ADD COLUMN dead_streak INTEGER NOT NULL DEFAULT 0"
+        )
+        await _db.commit()
+    except Exception:
+        log.debug("Columna dead_streak ya existe en corpus_gifs")
     try:
         await _db.execute("ALTER TABLE settings ADD COLUMN locale TEXT")
         await _db.commit()
@@ -560,13 +582,99 @@ async def count_gif_urls(guild_id: int) -> int:
 async def list_gif_urls(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
-        "SELECT id, url, created_at, media_url FROM corpus_gifs WHERE guild_id=? ORDER BY id",
+        "SELECT id, url, created_at, media_url, last_health_check "
+        "FROM corpus_gifs WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
         rows = await cursor.fetchall()
     return [
-        {"id": r[0], "url": r[1], "created_at": r[2], "media_url": r[3]} for r in rows
+        {
+            "id": r[0],
+            "url": r[1],
+            "created_at": r[2],
+            "media_url": r[3],
+            "last_health_check": r[4],
+        }
+        for r in rows
     ]
+
+
+async def get_gifs_for_health_check(
+    guild_id: int | None = None, limit: int = 500
+) -> list[dict]:
+    """GIFs a revisar en el próximo ciclo: los nunca chequeados primero, luego
+    los de checked_at más viejo. Así un corpus grande se termina cubriendo
+    entero a lo largo de varios ciclos sin necesitar un cursor aparte."""
+    db = await get_db()
+    if guild_id is None:
+        query = (
+            "SELECT id, guild_id, url, media_url FROM corpus_gifs "
+            "ORDER BY checked_at IS NOT NULL, checked_at LIMIT ?"
+        )
+        params: tuple = (limit,)
+    else:
+        query = (
+            "SELECT id, guild_id, url, media_url FROM corpus_gifs WHERE guild_id=? "
+            "ORDER BY checked_at IS NOT NULL, checked_at LIMIT ?"
+        )
+        params = (guild_id, limit)
+    async with db.execute(query, params) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {"id": r[0], "guild_id": r[1], "url": r[2], "media_url": r[3]} for r in rows
+    ]
+
+
+async def record_gif_health_check(gif_id: int, status: str) -> bool:
+    """Guarda el resultado de un chequeo de salud del backend (ver
+    r2.check_gif_url_health). Un solo 'dead' no basta para borrar -- podría
+    ser el host caído 30 segundos -- recién se borra al segundo 'dead'
+    seguido (dead_streak llega a 2). 'unreachable' se guarda tal cual mismo
+    sin sumar al streak: es un fallo puntual, no una confirmación de que el
+    link esté muerto de verdad.
+
+    Retorna True si el GIF fue borrado.
+    """
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    async with _db_lock:
+        if status == "ok":
+            await db.execute(
+                "UPDATE corpus_gifs SET last_health_check=?, checked_at=?, "
+                "dead_streak=0 WHERE id=?",
+                (status, now, gif_id),
+            )
+            await db.commit()
+            return False
+        if status != "dead":
+            await db.execute(
+                "UPDATE corpus_gifs SET last_health_check=?, checked_at=? WHERE id=?",
+                (status, now, gif_id),
+            )
+            await db.commit()
+            return False
+        await db.execute(
+            "UPDATE corpus_gifs SET last_health_check=?, checked_at=?, "
+            "dead_streak=dead_streak+1 WHERE id=?",
+            (status, now, gif_id),
+        )
+        async with db.execute(
+            "SELECT dead_streak, guild_id, url FROM corpus_gifs WHERE id=?",
+            (gif_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row or row[0] < 2:
+            await db.commit()
+            return False
+        streak, guild_id, url = row
+        await db.execute("DELETE FROM corpus_gifs WHERE id=?", (gif_id,))
+        await db.commit()
+    log.warning(
+        "Auto-borrado GIF #%s (guild=%s, url=%s): %s chequeos 'dead' seguidos",
+        gif_id, guild_id, url, streak,
+    )
+    await r2.delete_url(url)
+    return True
 
 
 async def update_gif_media_url(gif_id: int, media_url: str) -> None:

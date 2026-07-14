@@ -45,6 +45,7 @@ from config import (
     env_int,
     get_invite_url,
 )
+from cogs.gifs import HEALTH_CHECK_BATCH, run_gif_health_check
 from cogs.premium import is_premium_guild, set_premium, unset_premium
 from cogs.youtube import get_latest_video
 from db import (
@@ -98,6 +99,7 @@ log = logging.getLogger(__name__)
 
 _rate_post: LRUDict = LRUDict(512)
 _rate_delete: LRUDict = LRUDict(512)
+_rate_gif_verify: LRUDict = LRUDict(512)
 # user_id -> (expira_monotonic, [guilds con manage_guild]) — cache 5 min para
 # no golpear a Discord en cada click del panel.
 _user_guilds_cache: LRUDict = LRUDict(256)
@@ -973,6 +975,21 @@ async def _api_server_gifs_delete(request: web.Request, guild_id: int) -> web.Re
     )
 
 
+@guild_api
+async def _api_server_gifs_verify(request: web.Request, guild_id: int) -> web.Response:
+    # Dispara el chequeo en background: con cientos/miles de GIFs y el
+    # espaciado entre requests (HEALTH_CHECK_DELAY) esto puede tardar
+    # minutos, muy por encima de cualquier timeout razonable de request.
+    ip = _client_ip(request)
+    if not _rate_ok(_rate_gif_verify, ip, 1, window=300.0):
+        return web.json_response({"error": "rate limit"}, status=429)
+    total = await count_gif_urls(guild_id)
+    asyncio.create_task(run_gif_health_check(guild_id))
+    return web.json_response(
+        {"started": True, "total": total, "checking": min(total, HEALTH_CHECK_BATCH)}
+    )
+
+
 # ---------------- API: embeds (editor del panel) ----------------
 
 # Límites reales de Discord para embeds (title/description/fields/etc.).
@@ -1820,6 +1837,7 @@ async def start_web_server(bot: commands.Bot) -> None:
         app.router.add_delete(
             f"{base}/settings/gifs/{{gif_id}}", _api_server_gifs_delete
         )
+        app.router.add_post(f"{base}/settings/gifs/verify", _api_server_gifs_verify)
         app.router.add_post(f"{base}/embeds/send", _api_embeds_send)
         app.router.add_post(f"{base}/embeds/schedule", _api_embeds_schedule)
         app.router.add_post(f"{base}/embeds/validate", _api_embeds_validate)

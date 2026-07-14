@@ -2745,6 +2745,29 @@ async function loadGifs() {
     updateGifStats();
 
     const input = el('input', { type: 'text', placeholder: 'https://tenor.com/… o URL de R2', style: 'flex:1' });
+    const verifyBtn = el('button', {
+      class: 'btn btn-secondary',
+      title: 'Revisa cada GIF contra su host de origen y saca los que estén '
+        + 'realmente muertos (los que solo el navegador no puede previsualizar '
+        + 'no se tocan). Puede tardar unos minutos.',
+      onclick: async () => {
+        verifyBtn.disabled = true;
+        const original = verifyBtn.textContent;
+        verifyBtn.textContent = 'Verificando…';
+        try {
+          const resp = await apiFetch(`/api/server/${GUILD_ID}/settings/gifs/verify`, { method: 'POST' });
+          const msg = resp.checking < resp.total
+            ? `Verificando los ${resp.checking} más antiguos de ${resp.total} GIFs — el resto se cubre en próximos ciclos`
+            : `Verificación de ${resp.total} GIFs iniciada en segundo plano`;
+          toast(`${msg} — recargá esta sección en unos minutos`, 'ok');
+        } catch (e) {
+          toast(e.status === 429 ? 'Ya hay una verificación reciente — esperá antes de disparar otra' : e.message, e.status === 429 ? 'warn' : 'err');
+        } finally {
+          verifyBtn.disabled = false;
+          verifyBtn.textContent = original;
+        }
+      },
+    }, 'Verificar GIFs');
     box.append(el('div', { class: 'add-row' }, input,
       el('button', {
         class: 'btn btn-primary',
@@ -2765,7 +2788,8 @@ async function loadGifs() {
             toast(e.status === 429 ? 'Rate limit — espera antes de agregar más' : e.message, e.status === 429 ? 'warn' : 'err');
           }
         },
-      }, 'Agregar')));
+      }, 'Agregar'),
+      verifyBtn));
 
     if (!_gifPool.length) {
       box.append(emptyState('Todavía no hay GIFs guardados — añade uno con el campo de arriba.'));

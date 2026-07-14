@@ -12,10 +12,12 @@ from discord.ext import commands, tasks
 import r2
 from db import (
     count_gif_urls,
+    get_gifs_for_health_check,
     get_random_gif_candidates,
     get_unresolved_gifs,
     is_channel_ignored,
     mark_gif_check,
+    record_gif_health_check,
     save_gif_url,
     update_gif_media_url,
 )
@@ -124,15 +126,39 @@ async def get_live_gif(
     return None
 
 
+# Espaciado entre chequeos del ciclo de salud, para no golpear el mismo host
+# en ráfaga -- ver check_gif_url_health/record_gif_health_check en db.py/r2.py.
+HEALTH_CHECK_DELAY = 1.5
+HEALTH_CHECK_BATCH = 500
+
+
+async def run_gif_health_check(
+    guild_id: int | None = None, limit: int = HEALTH_CHECK_BATCH
+) -> int:
+    """Revisa hasta `limit` GIFs (de un guild puntual, o de todos si es
+    None -- usado por el ciclo diario) contra el propio host y guarda el
+    resultado. Usado tanto por el loop periódico como por el botón manual
+    "Verificar GIFs" del panel."""
+    gifs = await get_gifs_for_health_check(guild_id, limit=limit)
+    for gif in gifs:
+        url = gif["media_url"] or gif["url"]
+        status = await asyncio.to_thread(r2.check_gif_url_health, url)
+        await record_gif_health_check(gif["id"], status)
+        await asyncio.sleep(HEALTH_CHECK_DELAY)
+    return len(gifs)
+
+
 class Gifs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     async def cog_load(self) -> None:
         self.resolve_gifs_task.start()
+        self.gif_health_check_task.start()
 
     async def cog_unload(self) -> None:
         self.resolve_gifs_task.cancel()
+        self.gif_health_check_task.cancel()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -164,6 +190,19 @@ class Gifs(commands.Cog):
 
     @resolve_gifs_task.before_loop
     async def _wait_ready(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=24)
+    async def gif_health_check_task(self):
+        try:
+            checked = await run_gif_health_check()
+            if checked:
+                log.info("Ciclo de salud de GIFs: %s revisados", checked)
+        except Exception:
+            log.exception("Error en gif_health_check_task")
+
+    @gif_health_check_task.before_loop
+    async def _wait_ready_health(self):
         await self.bot.wait_until_ready()
 
     @app_commands.command(
