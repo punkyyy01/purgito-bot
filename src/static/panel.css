@@ -570,6 +570,18 @@ h1 {
   line-height: 1.4;
   color: var(--text-muted);
 }
+/* Aviso legal bajo el grid de precios (Términos/Privacidad): en flujo
+   normal, con su propio espacio reservado — antes reusaba
+   .premium-plan-fineprint (pensada para el gap:18px interno de una
+   tarjeta individual) y quedaba sin separación del grid de arriba. */
+.premium-legal-note {
+  margin: var(--space-4) 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.premium-legal-note a { color: var(--text-muted); text-decoration: underline; }
+.premium-legal-note a:hover { color: var(--accent-hover); }
 .premium-plan-recommended {
   align-self: flex-start;
   font-size: 11px;

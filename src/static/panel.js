@@ -2575,7 +2575,11 @@ async function loadPremium() {
     // TODO: /terms y /privacy no están expuestas como rutas en webapi.py todavía
     // (solo existen docs/TERMS.md y docs/PRIVACY.md en el repo) — hay que
     // servirlas antes de que estos links funcionen.
-    const legalNote = el('p', { class: 'premium-plan-fineprint' },
+    // Clase propia (antes reusaba .premium-plan-fineprint, pensada para el
+    // gap:18px de una tarjeta individual): sin eso, este párrafo quedaba sin
+    // separación del grid de precios — pegado a su borde inferior, en la
+    // costura entre ambas tarjetas. Ver diagnóstico en el reporte del fix.
+    const legalNote = el('p', { class: 'premium-legal-note' },
       'Al continuar aceptas los ',
       el('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Términos'),
       ' y la ',
