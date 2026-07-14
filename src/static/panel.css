@@ -738,14 +738,42 @@ h1 {
    + overflow es el tope para que no crezca infinito en pantallas chicas. */
 .embed-form textarea.autogrow { min-height: 70px; max-height: 400px; overflow-y: auto; resize: none; }
 .embed-form input[type='color'] { width: 60px; height: 34px; padding: 2px; cursor: pointer; }
+.color-field { display: flex; align-items: center; gap: 8px; }
+.color-hex-input {
+  width: 110px;
+  font-family: monospace;
+  text-transform: uppercase;
+}
+.color-hex-input.invalid { border-color: var(--danger); }
 .embed-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .embed-field-row {
   display: grid;
-  grid-template-columns: 1fr 1fr auto auto;
+  grid-template-columns: auto 1fr 1fr auto auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
 }
+.field-drag-handle { cursor: grab; color: var(--text-muted); padding: 0 6px; touch-action: none; }
+.field-drag-handle:active { cursor: grabbing; }
+.embed-field-row.dragging { opacity: 0.4; }
+.embed-field-row.drag-over { border-top: 2px solid var(--accent); }
+
+/* Secciones colapsables del editor de embeds (accordionGroup en panel.js). */
+.embed-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.embed-group-title {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface-2);
+  list-style: none;
+  user-select: none;
+}
+.embed-group-title::-webkit-details-marker { display: none; }
+.embed-group-title::before { content: '▸'; display: inline-block; margin-right: 8px; transition: transform var(--transition); color: var(--text-muted); }
+.embed-group[open] > .embed-group-title::before { transform: rotate(90deg); }
+.embed-group-body { padding: 14px; }
 
 /* Barra de embeds (Embed 1..N + agregar + galería) sobre el formulario. */
 .embed-bar-tabs {
@@ -1041,6 +1069,8 @@ h1 {
 @media (max-width: 768px) {
   .embed-two { grid-template-columns: 1fr; }
   .embed-field-row { grid-template-columns: 1fr; }
+  /* DnD nativo no existe en touch: el handle solo confundiría. */
+  .field-drag-handle { display: none; }
 }
 
 /* ---------- Fase 5: modal, popover de inserción, imágenes, historial ---------- */

@@ -6,7 +6,7 @@
 
 **Bot de Discord que aprende a hablar como tu servidor.**
 
-Cadenas de Markov · Colección de GIFs · Música · Configuración guiada · Notificaciones de YouTube
+Cadenas de Markov · Editor de embeds · Colección de GIFs · Música · Notificaciones de YouTube
 
 ---
 
@@ -29,6 +29,7 @@ Cadenas de Markov · Colección de GIFs · Música · Configuración guiada · N
 | 🎵 | **Música** | Reproduce audio de YouTube/URLs con cola, loop, shuffle y controles interactivos |
 | 🎞️ | **Colección de GIFs** | Guarda GIFs de Tenor/Giphy automáticamente; los de Discord CDN se suben a R2 |
 | ⚙️ | **Configuración del servidor** | Panel `/settings`, onboarding `/setup` y mensaje de bienvenida con acceso rápido |
+| 🧩 | **Editor de embeds del panel** | Arma embeds clásicos o layouts con Components V2 y botones interactivos (incluye botones de rol) desde el navegador, con plantillas guardables |
 | 📺 | **Notificaciones YouTube** | Sondea canales cada 15 min y avisa cuando hay video nuevo |
 | 😂 | **Memes** | Genera memes con `/momo` o con reply a imagen; captions con Groq (llama-4-scout) o Markov |
 | ⏱️ | **Memes automáticos** | Postea memes en canales configurables cada 2–24 horas |

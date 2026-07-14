@@ -921,6 +921,15 @@ function formGroup(title, ...children) {
     el('div', { class: 'form-group-title' }, title), ...children);
 }
 
+// Variante colapsable de formGroup (editor de embeds clásico): <details>
+// nativo, así el toggle es accesible (teclado, lector de pantalla) sin JS.
+// `open` indica si arranca expandido — se pasa según el estado del embed.
+function accordionGroup(title, open, ...children) {
+  return el('details', { class: 'embed-group', open: open ? '' : null },
+    el('summary', { class: 'embed-group-title' }, title),
+    el('div', { class: 'embed-group-body' }, ...children));
+}
+
 // Estado vacío del preview con el caret parpadeante en vez de un rectángulo muerto.
 function previewEmpty(msg) {
   return el('div', { class: 'preview-empty' },
@@ -1293,6 +1302,52 @@ function imageField(obj, key, onChange, opts = {}) {
   return wrap;
 }
 
+// Swatch nativo + input de texto para hex, sincronizados en ambos sentidos.
+function colorField(obj, key, onChange) {
+  const swatch = el('input', { type: 'color', value: /^#[0-9a-fA-F]{6}$/.test(obj[key]) ? obj[key] : '#8B6EF5' });
+  const text = el('input', {
+    type: 'text',
+    class: 'color-hex-input',
+    value: obj[key] || '',
+    placeholder: '#8B6EF5',
+    maxlength: '7',
+    spellcheck: 'false',
+  });
+
+  swatch.oninput = () => {
+    obj[key] = swatch.value;
+    text.value = swatch.value;
+    text.classList.remove('invalid');
+    onChange();
+  };
+
+  text.oninput = () => {
+    let v = text.value.trim();
+    if (v && !v.startsWith('#')) v = '#' + v;
+    if (v === '') {
+      obj[key] = '';
+      text.classList.remove('invalid');
+      onChange();
+      return;
+    }
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+      obj[key] = v;
+      swatch.value = v;
+      text.classList.remove('invalid');
+      onChange();
+    } else {
+      // Se deja escribir libremente (por si está a medio pegar/tipear), pero
+      // no se guarda en `obj` ni se dispara onChange hasta que sea un hex
+      // válido de 6 dígitos.
+      text.classList.add('invalid');
+    }
+  };
+
+  text.onblur = () => { text.value = obj[key] || ''; text.classList.remove('invalid'); };
+
+  return el('div', { class: 'color-field' }, swatch, text);
+}
+
 // --- Historial local (5.4) ---
 
 const HIST_MAX = 20;
@@ -1639,13 +1694,39 @@ function renderClassicEditor(box, channels, roles) {
       value.oninput = () => { f.value = value.value; updatePreview(); };
       const inline = el('input', { type: 'checkbox', checked: f.inline });
       inline.onchange = () => { f.inline = inline.checked; updatePreview(); };
-      fieldsBox.append(el('div', { class: 'embed-field-row' },
-        name, value,
+      // Solo el handle es draggable: arrastrar desde los inputs seguiría
+      // seleccionando texto normalmente. DnD nativo (mismo enfoque que
+      // Discohook) — no funciona en touch; ver nota del reporte.
+      const handle = el('span', {
+        class: 'field-drag-handle', draggable: 'true',
+        title: 'Arrastra para reordenar', 'aria-label': 'Arrastra para reordenar',
+      }, '⠿');
+      const row = el('div', { class: 'embed-field-row' },
+        handle, name, value,
         el('label', { class: 'toggle' }, inline, 'inline'),
         el('button', {
           class: 'btn btn-danger btn-sm',
           onclick: () => { s.fields.splice(i, 1); renderFields(); updatePreview(); },
-        }, '✗')));
+        }, '✗'));
+      handle.ondragstart = (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(i));
+        row.classList.add('dragging');
+      };
+      handle.ondragend = () => row.classList.remove('dragging');
+      row.ondragover = (e) => { e.preventDefault(); row.classList.add('drag-over'); };
+      row.ondragleave = () => row.classList.remove('drag-over');
+      row.ondrop = (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        if (Number.isNaN(from) || from === i) return;
+        const [moved] = s.fields.splice(from, 1);
+        s.fields.splice(i, 0, moved);
+        renderFields();
+        updatePreview();
+      };
+      fieldsBox.append(row);
     });
     addFieldBtn.disabled = s.fields.length >= EMBED_LIMITS.fields;
   }
@@ -1788,27 +1869,27 @@ function renderClassicEditor(box, channels, roles) {
 
   const form = el('div', { class: 'embed-form' },
     embedBar,
-    formGroup('Cuerpo',
+    accordionGroup('Cuerpo', true,
       fieldBlock('Título', bound('input', 'title', { type: 'text', maxlength: String(EMBED_LIMITS.title) })),
       fieldBlock('Descripción', insertWrap(
         bound('textarea', 'description', { maxlength: String(EMBED_LIMITS.description) }),
         ['menciones', 'fecha', 'emoji'])),
-      fieldBlock('Color', bound('input', 'color', { type: 'color' }))),
-    formGroup('Autor',
+      fieldBlock('Color', colorField(s, 'color', updatePreview))),
+    accordionGroup('Autor', !!(s.authorName || s.authorIcon),
       el('div', { class: 'embed-two' },
         fieldBlock('Nombre', insertWrap(
           bound('input', 'authorName', { type: 'text', maxlength: String(EMBED_LIMITS.author) }), ['emoji'])),
         fieldBlock('Ícono del autor', imageField(s, 'authorIcon', updatePreview)))),
-    formGroup('Imágenes',
+    accordionGroup('Imágenes', !!(s.thumbnail || s.image),
       el('div', { class: 'embed-two' },
         fieldBlock('Thumbnail', imageField(s, 'thumbnail', updatePreview, { gif: true })),
         fieldBlock('Imagen grande', imageField(s, 'image', updatePreview, { gif: true })))),
-    formGroup('Footer',
+    accordionGroup('Footer', !!(s.footerText || s.footerIcon),
       el('div', { class: 'embed-two' },
         fieldBlock('Texto', insertWrap(
           bound('input', 'footerText', { type: 'text', maxlength: String(EMBED_LIMITS.footer) }), ['emoji'])),
         fieldBlock('Ícono del footer', imageField(s, 'footerIcon', updatePreview)))),
-    formGroup('Fields',
+    accordionGroup('Fields', s.fields.length > 0,
       el('div', { class: 'field' }, fieldsBox, addFieldBtn)),
     formGroup('Destino y envío',
       el('div', { class: 'field' }, el('label', {}, 'Canal destino'), chSel),
@@ -2157,9 +2238,7 @@ function renderBlockForm(b, onChange, roles) {
   const box = el('div', {});
   const accentChk = el('input', { type: 'checkbox', checked: b.accent });
   accentChk.onchange = () => { b.accent = accentChk.checked; onChange(); };
-  const colorInp = el('input', { type: 'color', value: b.accent_color });
-  colorInp.oninput = () => { b.accent_color = colorInp.value; onChange(); };
-  box.append(el('div', { class: 'add-row' }, el('label', { class: 'toggle' }, accentChk, 'Barra de color'), colorInp));
+  box.append(el('div', { class: 'add-row' }, el('label', { class: 'toggle' }, accentChk, 'Barra de color'), colorField(b, 'accent_color', onChange)));
   const nested = el('div', { class: 'layout-nested' });
   renderBlocks(nested, b.children, true, onChange, roles);
   box.append(nested);

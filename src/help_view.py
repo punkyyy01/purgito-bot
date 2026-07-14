@@ -14,6 +14,8 @@ INTRO_DESCRIPTION = (
     "usando cadenas de Markov entrenadas con los propios mensajes del server, "
     "reproduce música, guarda los GIFs que se comparten en una galería pública "
     "y avisa cuando tus creadores favoritos de YouTube publican contenido nuevo.\n\n"
+    "Desde el panel web también puedes armar embeds y mensajes con botones "
+    "interactivos —incluyendo botones que asignan un rol— sin escribir código.\n\n"
     "Todos los comandos son **slash commands** (`/`) — escribe `/` en el chat y "
     "Discord te va a mostrar las opciones con autocompletado. La única excepción "
     "es `!ping`, que es un comando de texto clásico.\n\n"
@@ -93,6 +95,23 @@ CATEGORIES = {
             ("/gif_add <url>", "añade un GIF a la colección ⭐"),
             ("!ping", "verifica que el bot está online"),
         ],
+    },
+    "panel": {
+        "emoji": "🧩",
+        "label": "Panel web",
+        "title": "🧩 Panel web",
+        "row": 1,
+        "intro": (
+            f"Estas funciones viven en el panel web ({PANEL_URL}), no son slash commands.\n\n"
+            "🧩 **Editor de embeds** — arma embeds clásicos (hasta 10 por mensaje) o "
+            "layouts con Components V2: contenedores, secciones, galerías de imágenes "
+            "y separadores.\n"
+            "🔘 **Botones interactivos** — agrega botones de enlace o botones que "
+            "asignan/quitan un rol al hacer clic.\n"
+            "🖼️ **Imágenes** — sube imágenes directo desde tu computador o pega una URL.\n"
+            "💾 **Plantillas** — guarda tus embeds favoritos para reusarlos después."
+        ),
+        "commands": [],
     },
 }
 

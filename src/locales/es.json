@@ -153,6 +153,6 @@
 
   "setup.title": "🚀 Configuración inicial de Purgito",
   "setup.body": "Te guío por los ajustes esenciales. Usa el menú de abajo para recorrer cada categoría:\n\n**1. Idioma** — elige el idioma del bot 🌐\n**2. Chat** — decide si el bot responde al mencionarlo y en qué canal 💬\n**3. Canales ignorados** — excluye canales sensibles (logs, anuncios) 🚫\n\nCuando termines, ejecuta `/refeed_all` para que el bot aprenda del historial del servidor. Puedes volver a este panel cuando quieras con `/settings`.",
-  "setup.panel_cta": "💻 **Panel web:** configura todo desde el panel web sin necesidad de comandos: {url}",
+  "setup.panel_cta": "💻 **Panel web:** configura todo desde el navegador — incluye un editor visual de embeds y botones interactivos: {url}",
   "setup.status_header": "**Ahora mismo:**\n👁️ Veo {seen} de {total} canales\n💬 Tengo {corpus} mensajes guardados\n🚫 {ignored} canal(es) excluido(s)\n\n"
 }
