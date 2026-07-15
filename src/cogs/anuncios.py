@@ -4,6 +4,7 @@ frases_especiales (esas se mezclan al azar en el chat Markov)."""
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 import json
 
@@ -11,9 +12,12 @@ import discord
 from discord.ext import commands, tasks
 
 from db import (
+    add_pending_deletion,
     extract_send_options,
+    get_due_pending_deletions,
     get_due_scheduled_announcements,
     normalize_embeds_json,
+    remove_pending_deletion,
     update_announcement_last_sent,
 )
 from layout_v2 import build_layout_view
@@ -28,9 +32,11 @@ class Anuncios(commands.Cog):
 
     async def cog_load(self) -> None:
         self.check_announcements.start()
+        self.sweep_pending_deletions.start()
 
     async def cog_unload(self) -> None:
         self.check_announcements.cancel()
+        self.sweep_pending_deletions.cancel()
 
     @tasks.loop(minutes=1)
     async def check_announcements(self):
@@ -44,13 +50,18 @@ class Anuncios(commands.Cog):
                 perms = channel.permissions_for(channel.guild.me)
                 if not perms.send_messages:
                     return
+                # delete_after= es el camino rápido (asyncio.sleep interno de
+                # discord.py, vive en memoria); add_pending_deletion de abajo
+                # es la red de seguridad que sobrevive a un restart del bot.
+                delete_after = item.get("delete_after_seconds")
+                delete_kwarg = {"delete_after": delete_after} if delete_after else {}
                 if item.get("embed_json") and item.get("content_mode") == "layout_v2":
                     # Layout Components V2 armado en el editor del panel.
                     if not perms.embed_links:
                         return
                     view = build_layout_view(json.loads(item["embed_json"]))
                     extra = send_kwargs(extract_send_options(item["embed_json"]))
-                    await channel.send(view=view, **extra)
+                    msg = await channel.send(view=view, **delete_kwarg, **extra)
                 elif item.get("embed_json"):
                     # Embeds clásicos. El JSON es siempre una lista (Discord
                     # admite hasta 10); normalize_embeds_json envuelve el formato
@@ -62,9 +73,12 @@ class Anuncios(commands.Cog):
                         for e in normalize_embeds_json(item["embed_json"])
                     ]
                     extra = send_kwargs(extract_send_options(item["embed_json"]))
-                    await channel.send(embeds=embeds, **extra)
+                    msg = await channel.send(embeds=embeds, **delete_kwarg, **extra)
                 else:
-                    await channel.send(item["message"])
+                    msg = await channel.send(item["message"], **delete_kwarg)
+                if delete_after:
+                    delete_at = datetime.now(timezone.utc) + timedelta(seconds=delete_after)
+                    await add_pending_deletion(channel.id, msg.id, delete_at)
                 await update_announcement_last_sent(item["id"])
             except Exception:
                 log.exception("Error enviando anuncio programado %s", item["id"])
@@ -73,6 +87,34 @@ class Anuncios(commands.Cog):
 
     @check_announcements.before_loop
     async def _wait_ready(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=30)
+    async def sweep_pending_deletions(self):
+        due = await get_due_pending_deletions()
+
+        async def _delete_one(item: dict) -> None:
+            try:
+                channel = self.bot.get_channel(item["channel_id"])
+                if channel is not None:
+                    msg = await channel.fetch_message(item["message_id"])
+                    await msg.delete()
+            except discord.NotFound:
+                pass  # ya se borró por el camino rápido, o un mod lo borró antes — está bien
+            except discord.Forbidden:
+                log.warning(
+                    "Sin permiso para borrar mensaje %s en canal %s",
+                    item["message_id"], item["channel_id"],
+                )
+            except Exception:
+                log.exception("Error en sweep de borrado pendiente %s", item["id"])
+                return  # no se borra la fila, se reintenta en el próximo sweep
+            await remove_pending_deletion(item["id"])
+
+        await asyncio.gather(*(_delete_one(item) for item in due))
+
+    @sweep_pending_deletions.before_loop
+    async def _wait_ready_sweep(self):
         await self.bot.wait_until_ready()
 
 

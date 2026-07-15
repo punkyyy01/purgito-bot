@@ -123,6 +123,9 @@
   "settings.anuncios.activate_channel_placeholder": "Choose the target channel…",
   "settings.anuncios.activate_pending_hint": "Pick the channel below where the announcement will be sent.",
   "settings.anuncios.limit_reached": "❌ This server already reached the max number of scheduled announcements. Remove one before adding another.",
+  "settings.anuncios.modal_field_delete_after": "Auto-delete after (seconds, optional)",
+  "settings.anuncios.invalid_delete_after": "❌ Must be a number between 1 and 86400 seconds.",
+  "settings.anuncios.preview_delete_after": "🗑️ auto-deletes in {seconds}s",
 
   "chat.empty_reply.full": "I don't know how to talk like this server yet 😅 I need to read more of your messages first. An admin can run `/refeed_all` so I learn from the whole server history, or `/setup` to finish setting me up.",
   "chat.empty_reply.short": "still drawing a blank over here 👀",

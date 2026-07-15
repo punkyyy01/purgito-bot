@@ -225,13 +225,16 @@ def test_template_ownership_checks(memory_db):
 # ─── Anuncios: rama embed_json vs texto plano ────────────────────────────────
 
 
-def _fake_channel():
+def _fake_channel(channel_id=10, sent_message_id=999):
     channel = MagicMock(spec=discord.TextChannel)
+    channel.id = channel_id
     perms = MagicMock()
     perms.send_messages = True
     perms.embed_links = True
     channel.permissions_for.return_value = perms
-    channel.send = AsyncMock()
+    sent_message = MagicMock(spec=discord.Message)
+    sent_message.id = sent_message_id
+    channel.send = AsyncMock(return_value=sent_message)
     return channel
 
 
@@ -249,6 +252,83 @@ def test_scheduled_announcement_plain_text_branch(memory_db):
     channel = _fake_channel()
     _run_announcement_loop(channel)
     channel.send.assert_awaited_once_with("hola texto")
+
+
+def test_scheduled_announcement_delete_after_forwarded(memory_db):
+    asyncio.run(
+        db.add_scheduled_announcement(
+            1, 10, "se autoborra", "interval", 1,
+            interval_minutes=30, delete_after_seconds=1,
+        )
+    )
+    channel = _fake_channel()
+    _run_announcement_loop(channel)
+    channel.send.assert_awaited_once_with("se autoborra", delete_after=1)
+
+
+def test_scheduled_announcement_no_delete_after_omits_kwarg(memory_db):
+    asyncio.run(
+        db.add_scheduled_announcement(1, 10, "queda", "interval", 1, interval_minutes=30)
+    )
+    channel = _fake_channel()
+    _run_announcement_loop(channel)
+    channel.send.assert_awaited_once_with("queda")
+
+
+def test_scheduled_announcement_delete_after_registers_pending_deletion(memory_db):
+    # Además del delete_after= rápido, debe quedar una fila de respaldo en
+    # pending_message_deletions (channel_id, message_id del mensaje enviado).
+    asyncio.run(
+        db.add_scheduled_announcement(
+            1, 10, "se autoborra", "interval", 1,
+            interval_minutes=30, delete_after_seconds=60,
+        )
+    )
+    channel = _fake_channel(channel_id=10, sent_message_id=555)
+    _run_announcement_loop(channel)
+    due = asyncio.run(db.get_due_pending_deletions())
+    assert due == []  # todavía no venció (delete_at en 60s, no <= now)
+
+
+def test_pending_deletion_swept_after_channel_restart(memory_db):
+    # Simula lo que queda en la DB si el bot se reinició antes del delete_after
+    # rápido: una fila ya vencida. El sweep debe borrar el mensaje y la fila.
+    from datetime import datetime, timedelta, timezone
+
+    from cogs.anuncios import Anuncios
+
+    past = datetime.now(timezone.utc) - timedelta(seconds=5)
+    asyncio.run(db.add_pending_deletion(10, 555, past))
+
+    channel = _fake_channel(channel_id=10)
+    fetched_message = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=fetched_message)
+    bot = MagicMock()
+    bot.get_channel.return_value = channel
+    cog = Anuncios(bot)
+    asyncio.run(cog.sweep_pending_deletions.coro(cog))
+
+    channel.fetch_message.assert_awaited_once_with(555)
+    fetched_message.delete.assert_awaited_once()
+    assert asyncio.run(db.get_due_pending_deletions()) == []
+
+
+def test_pending_deletion_notfound_is_silently_cleared(memory_db):
+    from datetime import datetime, timedelta, timezone
+
+    from cogs.anuncios import Anuncios
+
+    past = datetime.now(timezone.utc) - timedelta(seconds=5)
+    asyncio.run(db.add_pending_deletion(10, 555, past))
+
+    channel = _fake_channel(channel_id=10)
+    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "unknown message"))
+    bot = MagicMock()
+    bot.get_channel.return_value = channel
+    cog = Anuncios(bot)
+    asyncio.run(cog.sweep_pending_deletions.coro(cog))
+
+    assert asyncio.run(db.get_due_pending_deletions()) == []
 
 
 def test_scheduled_announcement_legacy_dict_embed_branch(memory_db):

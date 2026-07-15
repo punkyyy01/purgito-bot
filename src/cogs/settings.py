@@ -59,6 +59,19 @@ PURGITO_COLOR = 0x8B00FF
 
 _HOUR_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
+MAX_DELETE_AFTER_SECONDS = 86400
+
+
+def _parse_delete_after_seconds(raw: str) -> int | None:
+    """None si el campo vino vacío (no autoborrar). Lanza ValueError si no es
+    un entero entre 1 y MAX_DELETE_AFTER_SECONDS."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not (1 <= int(raw) <= MAX_DELETE_AFTER_SECONDS):
+        raise ValueError
+    return int(raw)
+
 
 # ─── Infraestructura del panel ───────────────────────────────────────────────
 
@@ -885,7 +898,14 @@ class AnunciosCategory(SettingsCategory):
                         panel.locale,
                         time=f"{a['hour']:02d}:{a['minute']:02d}",
                     )
-                lines.append(f"• <#{a['channel_id']}> — {mode_text} — \"{preview}\"")
+                line = f"• <#{a['channel_id']}> — {mode_text} — \"{preview}\""
+                if a.get("delete_after_seconds"):
+                    line += " — " + t(
+                        "settings.anuncios.preview_delete_after",
+                        panel.locale,
+                        seconds=a["delete_after_seconds"],
+                    )
+                lines.append(line)
             body += "\n\n" + "\n".join(lines)
         else:
             body += "\n\n" + t("settings.anuncios.none", panel.locale)
@@ -947,6 +967,7 @@ class AnunciosCategory(SettingsCategory):
                     interval_minutes=pending.get("interval_minutes"),
                     hour=pending.get("hour"),
                     minute=pending.get("minute"),
+                    delete_after_seconds=pending.get("delete_after_seconds"),
                 )
                 panel.anuncio_pending = None
                 if new_id is None:
@@ -980,8 +1001,16 @@ class AnunciosCategory(SettingsCategory):
                         )[:45],
                         max_length=4,
                     )
+                    self.delete_after_input = discord.ui.TextInput(
+                        label=t(
+                            "settings.anuncios.modal_field_delete_after", panel.locale
+                        )[:45],
+                        max_length=5,
+                        required=False,
+                    )
                     self.add_item(self.message_input)
                     self.add_item(self.interval_input)
+                    self.add_item(self.delete_after_input)
 
                 async def on_submit(self, interaction: discord.Interaction):
                     raw = self.interval_input.value.strip()
@@ -991,10 +1020,21 @@ class AnunciosCategory(SettingsCategory):
                             ephemeral=True,
                         )
                         return
+                    try:
+                        delete_after = _parse_delete_after_seconds(
+                            self.delete_after_input.value
+                        )
+                    except ValueError:
+                        await interaction.response.send_message(
+                            t("settings.anuncios.invalid_delete_after", panel.locale),
+                            ephemeral=True,
+                        )
+                        return
                     panel.anuncio_pending = {
                         "message": self.message_input.value.strip(),
                         "mode": "interval",
                         "interval_minutes": int(raw),
+                        "delete_after_seconds": delete_after,
                     }
                     await panel.refresh(interaction)
 
@@ -1028,8 +1068,16 @@ class AnunciosCategory(SettingsCategory):
                         ],
                         max_length=5,
                     )
+                    self.delete_after_input = discord.ui.TextInput(
+                        label=t(
+                            "settings.anuncios.modal_field_delete_after", panel.locale
+                        )[:45],
+                        max_length=5,
+                        required=False,
+                    )
                     self.add_item(self.message_input)
                     self.add_item(self.hour_input)
+                    self.add_item(self.delete_after_input)
 
                 async def on_submit(self, interaction: discord.Interaction):
                     match = _HOUR_RE.match(self.hour_input.value.strip())
@@ -1039,11 +1087,22 @@ class AnunciosCategory(SettingsCategory):
                             ephemeral=True,
                         )
                         return
+                    try:
+                        delete_after = _parse_delete_after_seconds(
+                            self.delete_after_input.value
+                        )
+                    except ValueError:
+                        await interaction.response.send_message(
+                            t("settings.anuncios.invalid_delete_after", panel.locale),
+                            ephemeral=True,
+                        )
+                        return
                     panel.anuncio_pending = {
                         "message": self.message_input.value.strip(),
                         "mode": "daily",
                         "hour": int(match.group(1)),
                         "minute": int(match.group(2)),
+                        "delete_after_seconds": delete_after,
                     }
                     await panel.refresh(interaction)
 

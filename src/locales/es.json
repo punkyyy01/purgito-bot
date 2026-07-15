@@ -123,6 +123,9 @@
   "settings.anuncios.activate_channel_placeholder": "Elige el canal destino…",
   "settings.anuncios.activate_pending_hint": "Elige abajo el canal donde se enviará el anuncio.",
   "settings.anuncios.limit_reached": "❌ Este servidor ya alcanzó el máximo de anuncios programados. Elimina uno antes de agregar otro.",
+  "settings.anuncios.modal_field_delete_after": "Autoborrar después de (segundos, opcional)",
+  "settings.anuncios.invalid_delete_after": "❌ Tiene que ser un número entre 1 y 86400 segundos.",
+  "settings.anuncios.preview_delete_after": "🗑️ se autoborra en {seconds}s",
 
   "chat.empty_reply.full": "Todavía no puedo hablar como este servidor 😅 Necesito leer más mensajes primero. Un administrador puede ejecutar `/refeed_all` para que aprenda de todo el historial del servidor, o `/setup` para terminar de configurarme.",
   "chat.empty_reply.short": "todavía estoy en blanco por aquí 👀",

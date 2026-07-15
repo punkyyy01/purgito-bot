@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS scheduled_announcements (
     created_by INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     embed_json TEXT DEFAULT NULL,
-    content_mode TEXT NOT NULL DEFAULT 'classic_embed'
+    content_mode TEXT NOT NULL DEFAULT 'classic_embed',
+    delete_after_seconds INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_announcements_guild ON scheduled_announcements(guild_id);
 
@@ -222,6 +223,15 @@ CREATE TABLE IF NOT EXISTS shared_embeds (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_message_deletions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    delete_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pending_message_deletions_delete_at ON pending_message_deletions(delete_at);
 """
 
 
@@ -302,6 +312,13 @@ async def init_db():
             await _db.commit()
         except Exception:
             log.debug("Columna content_mode ya existe en %s", _table)
+    try:
+        await _db.execute(
+            "ALTER TABLE scheduled_announcements ADD COLUMN delete_after_seconds INTEGER"
+        )
+        await _db.commit()
+    except Exception:
+        log.debug("Columna delete_after_seconds ya existe en scheduled_announcements")
     await _db.commit()
     flag_path = os.path.join(DATA_DIR, ".images_wiped_v2")
     if not os.path.exists(flag_path):
@@ -1043,6 +1060,7 @@ async def add_scheduled_announcement(
     minute: int | None = None,
     embed_json: str | None = None,
     content_mode: str = "classic_embed",
+    delete_after_seconds: int | None = None,
 ) -> int | None:
     """Crea un anuncio programado. Devuelve el id insertado, o None si el guild
     ya llegó al límite de anuncios (a diferencia de gifs/imágenes, acá no se
@@ -1050,7 +1068,11 @@ async def add_scheduled_announcement(
 
     embed_json None = anuncio de texto plano (comportamiento clásico); con
     contenido, el loop de anuncios envía embeds o un layout Components V2 según
-    content_mode ('classic_embed' | 'layout_v2') en vez del texto de `message`."""
+    content_mode ('classic_embed' | 'layout_v2') en vez del texto de `message`.
+
+    delete_after_seconds None = el mensaje enviado queda (comportamiento
+    clásico); con valor, el loop de anuncios lo pasa como delete_after de
+    discord.py."""
     max_announcements = _limit_for_guild(
         guild_id,
         "MAX_ANNOUNCEMENTS_PER_GUILD_FREE",
@@ -1069,8 +1091,8 @@ async def add_scheduled_announcement(
             return None
         cursor = await db.execute(
             "INSERT INTO scheduled_announcements "
-            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by, embed_json, content_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(guild_id, channel_id, message, mode, interval_minutes, hour, minute, created_by, embed_json, content_mode, delete_after_seconds) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 guild_id,
                 channel_id,
@@ -1082,6 +1104,7 @@ async def add_scheduled_announcement(
                 created_by,
                 embed_json,
                 content_mode,
+                delete_after_seconds,
             ),
         )
         await db.commit()
@@ -1104,7 +1127,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
         "SELECT id, channel_id, message, mode, interval_minutes, hour, minute, "
-        "last_sent_at, created_by, created_at, embed_json, content_mode "
+        "last_sent_at, created_by, created_at, embed_json, content_mode, delete_after_seconds "
         "FROM scheduled_announcements WHERE guild_id=? ORDER BY id",
         (guild_id,),
     ) as cursor:
@@ -1123,6 +1146,7 @@ async def list_scheduled_announcements(guild_id: int) -> list[dict]:
             "created_at": r[9],
             "embed_json": r[10],
             "content_mode": r[11],
+            "delete_after_seconds": r[12],
         }
         for r in rows
     ]
@@ -1134,7 +1158,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
     porque hay que comparar hora:minuto y la FECHA local (no solo un delta)."""
     db = await get_db()
     async with db.execute(
-        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at, embed_json, content_mode "
+        "SELECT id, guild_id, channel_id, message, mode, interval_minutes, hour, minute, last_sent_at, embed_json, content_mode, delete_after_seconds "
         "FROM scheduled_announcements "
         "WHERE (mode='interval' AND (last_sent_at IS NULL "
         "       OR datetime(last_sent_at, '+' || interval_minutes || ' minutes') <= datetime('now'))) "
@@ -1157,6 +1181,7 @@ async def get_due_scheduled_announcements() -> list[dict]:
             "last_sent_at": r[8],
             "embed_json": r[9],
             "content_mode": r[10],
+            "delete_after_seconds": r[11],
         }
         if item["mode"] == "interval":
             due.append(item)
@@ -1407,6 +1432,47 @@ async def purge_expired_shared_embeds() -> int:
         )
         await db.commit()
     return cursor.rowcount
+
+
+# ─── Red de seguridad para delete_after de anuncios ──────────────────────────
+# El delete_after= que se le pasa a channel.send vive en memoria del proceso
+# (asyncio.sleep interno de discord.py) y no sobrevive un restart. Esta tabla
+# es el respaldo: anuncios.py registra acá cada borrado programado además de
+# pasar delete_after=, y un sweep periódico (y uno al arrancar el bot) limpia
+# lo que haya quedado pendiente si el proceso se reinició en el medio.
+
+
+async def add_pending_deletion(
+    channel_id: int, message_id: int, delete_at: datetime
+) -> int:
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "INSERT INTO pending_message_deletions (channel_id, message_id, delete_at) "
+            "VALUES (?, ?, ?)",
+            (channel_id, message_id, delete_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_due_pending_deletions() -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, channel_id, message_id FROM pending_message_deletions "
+        "WHERE delete_at <= datetime('now')"
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [{"id": r[0], "channel_id": r[1], "message_id": r[2]} for r in rows]
+
+
+async def remove_pending_deletion(deletion_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "DELETE FROM pending_message_deletions WHERE id=?", (deletion_id,)
+        )
+        await db.commit()
 
 
 # ─── Botones de layouts con acción funcional (Fase 3) ────────────────────────
