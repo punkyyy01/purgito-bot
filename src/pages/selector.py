@@ -23,8 +23,8 @@ SELECTOR_HTML = """<!DOCTYPE html>
   <h1>Invitar Purgito</h1>
   <div id="available" class="card-grid"></div>
 </main>
-<script src="/static/panel.js"></script>
-<script>initSelector();</script>
+{{IMPORT_MAP}}
+<script type="module" src="/static/js/main-selector.js?v={{STATIC_V}}"></script>
 </body>
 </html>
 """

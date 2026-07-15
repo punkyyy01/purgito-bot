@@ -597,25 +597,48 @@ async def _auth_error(request: web.Request) -> web.Response:
 # ---------------- Páginas del panel ----------------
 
 _STATIC_DIR = Path(__file__).parent / "static"
-try:
-    _STATIC_V = str(
-        int(
-            max(
-                (_STATIC_DIR / "panel.js").stat().st_mtime,
-                (_STATIC_DIR / "panel.css").stat().st_mtime,
-            )
-        )
-    )
-except OSError:
-    _STATIC_V = "1"
+_JS_DIR = _STATIC_DIR / "js"
+
+
+def _static_version() -> str:
+    """Versión = mtime máximo de todos los .js bajo static/js/ (recursivo) más
+    panel.css. Se calcula del glob, no de una lista a mano: agregar un módulo
+    nuevo bumpea la versión solo, sin que nadie tenga que acordarse de tocar
+    esta función (si no, Cloudflare podría servir un asset viejo cacheado 4 h)."""
+    try:
+        mtimes = [p.stat().st_mtime for p in _JS_DIR.rglob("*.js")]
+        mtimes.append((_STATIC_DIR / "panel.css").stat().st_mtime)
+        return str(int(max(mtimes)))
+    except (OSError, ValueError):
+        return "1"
+
+
+_STATIC_V = _static_version()
+
+
+def _import_map() -> str:
+    """Import map que le pone ?v= al query de cada módulo ES. Los import
+    relativos (`./x.js`) NO heredan el ?v= del <script> de entrada, así que sin
+    esto Cloudflare podría servir un módulo importado viejo contra un entrypoint
+    nuevo tras un deploy. El map se arma del glob, igual de automático que la
+    versión."""
+    files = sorted(p.relative_to(_STATIC_DIR).as_posix() for p in _JS_DIR.rglob("*.js"))
+    mapping = {f"/static/{f}": f"/static/{f}?v={_STATIC_V}" for f in files}
+    return json.dumps({"imports": mapping}, separators=(",", ":"))
+
+
+_IMPORT_MAP_TAG = f'<script type="importmap">{_import_map()}</script>'
 
 
 def _versioned_static(html_text: str) -> str:
     """Cloudflare cachea /static/*.js|css por 4 h; versionar la URL con el mtime
-    hace que cada deploy sirva assets frescos sin purgar el cache a mano."""
-    return html_text.replace(
-        "/static/panel.css", f"/static/panel.css?v={_STATIC_V}"
-    ).replace("/static/panel.js", f"/static/panel.js?v={_STATIC_V}")
+    hace que cada deploy sirva assets frescos sin purgar el cache a mano. Inyecta
+    el import map ({{IMPORT_MAP}}) y la versión del entrypoint ({{STATIC_V}})."""
+    return (
+        html_text.replace("{{IMPORT_MAP}}", _IMPORT_MAP_TAG)
+        .replace("{{STATIC_V}}", _STATIC_V)
+        .replace("/static/panel.css", f"/static/panel.css?v={_STATIC_V}")
+    )
 
 
 async def _dashboard(request: web.Request) -> web.StreamResponse:

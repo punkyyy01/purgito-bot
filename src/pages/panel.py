@@ -22,9 +22,8 @@ PANEL_HTML = """<!DOCTYPE html>
   <div id="catContent"></div>
 </main>
 <div id="toast"></div>
-<script>const GUILD_ID = "{{GUILD_ID}}";</script>
-<script src="/static/panel.js"></script>
-<script>initPanel();</script>
+{{IMPORT_MAP}}
+<script type="module" src="/static/js/main-panel.js?v={{STATIC_V}}" data-guild-id="{{GUILD_ID}}"></script>
 </body>
 </html>
 """
