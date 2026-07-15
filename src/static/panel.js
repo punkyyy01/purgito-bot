@@ -127,6 +127,14 @@ async function initSelector() {
   }
 }
 
+// Share pendiente (link /share/{id}): viene en ?share= al llegar del link, y
+// queda en sessionStorage tras cargarse en un panel — así volver al selector y
+// elegir OTRO servidor no pierde el embed compartido (no depende de la URL).
+function pendingShareId() {
+  return new URLSearchParams(location.search).get('share')
+    || sessionStorage.getItem('purgito_share_id');
+}
+
 function guildCard(g, configured) {
   const info = el('div', { class: 'card-info' },
     el('div', { class: 'card-name' }, g.name,
@@ -135,8 +143,12 @@ function guildCard(g, configured) {
       configured
         ? (g.member_count != null ? g.member_count + ' miembros' : '')
         : 'Purgito no está aquí'));
+  const share = configured ? pendingShareId() : null;
   const btn = configured
-    ? el('a', { class: 'btn btn-primary', href: '/server/' + g.id }, 'Configurar')
+    ? el('a', {
+        class: 'btn btn-primary',
+        href: '/server/' + g.id + (share ? '/embeds?share=' + encodeURIComponent(share) : ''),
+      }, 'Configurar')
     : el('a', { class: 'btn btn-primary', href: g.invite_url, target: '_blank', rel: 'noopener' }, 'Invitar');
   return el('div', { class: 'card' }, guildIcon(g), info, btn);
 }
@@ -240,8 +252,29 @@ function initPanel() {
       c.premium ? el('span', { class: 'badge badge-premium nav-label' }, 'PREMIUM') : null));
   }
   loadServerHead();
-  activate(currentCatFromUrl(), false);
+  const shareId = new URLSearchParams(location.search).get('share');
+  if (shareId) loadSharedEmbed(shareId).finally(() => activate(currentCatFromUrl(), false));
+  else activate(currentCatFromUrl(), false);
   window.onpopstate = () => activate(currentCatFromUrl(), false);
+}
+
+// Carga el payload de un link compartido en el editor clásico ANTES del primer
+// render (activate corre en el .finally del caller). El ?share= se limpia de
+// la URL para que un refresh no re-dispare la carga; el id queda en
+// sessionStorage para sobrevivir un cambio de servidor vía selector.
+async function loadSharedEmbed(shareId) {
+  try {
+    const data = await apiFetch(`/api/embeds/share/${encodeURIComponent(shareId)}`);
+    _embedTab = 'editor';
+    _embedMode = 'classic';
+    _embedDoc = docFromEmbeds(data.embeds, null, '', data.send_options);
+    sessionStorage.setItem('purgito_share_id', shareId);
+    toast('Embed cargado desde un link compartido', 'ok');
+  } catch (e) {
+    sessionStorage.removeItem('purgito_share_id');
+    toast(e.message || 'Este link ya expiró o no existe', 'err');
+  }
+  history.replaceState({}, '', location.pathname);
 }
 
 async function loadServerHead() {
@@ -1900,6 +1933,9 @@ function renderClassicEditor(box, channels, roles) {
           // escribir" dejó de tener sentido (a diferencia de programar, donde
           // seguís editando variantes). Ver criterio en el reporte.
           clearEmbedDraft('classic');
+          // Mismo criterio para un share cargado: ya se usó, no re-cargarlo
+          // al volver al selector.
+          sessionStorage.removeItem('purgito_share_id');
         }
       } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
     },
@@ -1929,9 +1965,31 @@ function renderClassicEditor(box, channels, roles) {
     },
   }, 'Guardar como plantilla');
 
+  const shareBtn = el('button', {
+    class: 'btn btn-secondary',
+    onclick: async () => {
+      const dicts = docDicts(doc);
+      const err = validateEmbedsClient(dicts);
+      if (err) { showFormAlert(alertBox, err); return; }
+      showFormAlert(alertBox, '');
+      try {
+        const resp = await apiFetch(`/api/server/${GUILD_ID}/embeds/share`, {
+          method: 'POST', body: { embeds: dicts, send_options: sendOptsToApi(doc.sendOpts) },
+        });
+        toast('Link listo — cualquiera con el link puede cargar este embed en su servidor', 'ok', {
+          label: 'Copiar link',
+          onclick: async () => {
+            try { await navigator.clipboard.writeText(resp.url); toast('Link copiado', 'ok'); }
+            catch (e2) { prompt('Copia el link:', resp.url); }
+          },
+        });
+      } catch (err2) { toast(err2.message, err2.status === 429 ? 'warn' : 'err'); }
+    },
+  }, 'Compartir');
+
   const clearBtn = el('button', {
     class: 'btn btn-secondary',
-    onclick: () => { clearEmbedDraft('classic'); _embedDoc = blankDoc(); loadEmbeds(); },
+    onclick: () => { clearEmbedDraft('classic'); sessionStorage.removeItem('purgito_share_id'); _embedDoc = blankDoc(); loadEmbeds(); },
   }, 'Limpiar');
 
   const histBtn = el('button', { class: 'btn btn-secondary', onclick: openHistoryModal }, 'Historial');
@@ -1970,7 +2028,7 @@ function renderClassicEditor(box, channels, roles) {
       sendOptionsPanel(doc.sendOpts, roles)),
     alertBox,
     el('div', { class: 'embed-actions' },
-      sendBtn, saveBtn, clearBtn,
+      sendBtn, saveBtn, shareBtn, clearBtn,
       el('span', { class: 'embed-actions-spacer' }),
       histBtn, jsonBtn));
 

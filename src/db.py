@@ -1,9 +1,11 @@
 import os
 import re
 import json
+import string
 import asyncio
 import logging
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -211,6 +213,14 @@ CREATE TABLE IF NOT EXISTS guild_auto_refeed (
     triggered_at TEXT NOT NULL,
     completed_at TEXT,
     welcome_channel_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS shared_embeds (
+    share_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,          -- JSON: { embeds: [...], send_options: {...} }
+    created_guild_id INTEGER,       -- solo referencia/auditoría, no restringe quién puede abrirlo
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
 );
 """
 
@@ -1312,6 +1322,91 @@ async def delete_embed_template(template_id: int, guild_id: int) -> bool:
         deleted = cursor.rowcount > 0
         await db.commit()
     return deleted
+
+
+# ─── Embeds compartidos por link ─────────────────────────────────────────────
+
+# TTL fijo de los links compartidos. No se expone al usuario por ahora;
+# para cambiarlo basta con editar esta constante.
+SHARED_EMBED_TTL_DAYS = 7
+
+_SHARE_ID_ALPHABET = string.ascii_letters + string.digits
+
+
+def share_links_daily_limit() -> int:
+    """Máximo de links compartidos que un guild puede generar por día (UTC).
+    Evita que el share se use como storage gratis de terceros."""
+    return _env_int("MAX_SHARE_LINKS_PER_GUILD_DAY", 20)
+
+
+async def generate_unique_share_id(length: int = 8) -> str:
+    """Id corto random para el link. Con 62^8 combinaciones la colisión es
+    casi imposible, pero si ocurre se reintenta con longitud +1 — mismo patrón
+    que generateUniqueShortenKey de Discohook."""
+    db = await get_db()
+    while True:
+        share_id = "".join(secrets.choice(_SHARE_ID_ALPHABET) for _ in range(length))
+        async with db.execute(
+            "SELECT 1 FROM shared_embeds WHERE share_id=?", (share_id,)
+        ) as cursor:
+            if await cursor.fetchone() is None:
+                return share_id
+        length += 1
+
+
+async def add_shared_embed(payload: str, guild_id: int) -> tuple[str, str]:
+    """Guarda un payload compartido y devuelve (share_id, expires_at)."""
+    share_id = await generate_unique_share_id()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=SHARED_EMBED_TTL_DAYS)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "INSERT INTO shared_embeds "
+            "(share_id, payload, created_guild_id, created_at, expires_at) "
+            "VALUES (?, ?, ?, datetime('now'), ?)",
+            (share_id, payload, guild_id, expires_at),
+        )
+        await db.commit()
+    return share_id, expires_at
+
+
+async def get_shared_embed(share_id: str) -> str | None:
+    """Payload JSON del link, o None si no existe o ya venció. No se borra al
+    leer: el mismo link puede abrirse varias veces (p. ej. en dos servidores);
+    solo se elimina por expiración (purge_expired_shared_embeds)."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT payload FROM shared_embeds "
+        "WHERE share_id=? AND expires_at > datetime('now')",
+        (share_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def count_shared_embeds_today(guild_id: int) -> int:
+    """Links generados por el guild en el día UTC en curso (límite diario)."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM shared_embeds "
+        "WHERE created_guild_id=? AND created_at >= datetime('now', 'start of day')",
+        (guild_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def purge_expired_shared_embeds() -> int:
+    """Borra links vencidos. Lo llama el loop diario de limpieza de guilds."""
+    db = await get_db()
+    async with _db_lock:
+        cursor = await db.execute(
+            "DELETE FROM shared_embeds WHERE expires_at <= datetime('now')"
+        )
+        await db.commit()
+    return cursor.rowcount
 
 
 # ─── Botones de layouts con acción funcional (Fase 3) ────────────────────────

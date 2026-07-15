@@ -56,8 +56,12 @@ from db import (
     add_meme_schedule,
     add_reaction_to_pool,
     add_scheduled_announcement,
+    add_shared_embed,
     add_youtube_sub,
     count_gif_urls,
+    count_shared_embeds_today,
+    get_shared_embed,
+    share_links_daily_limit,
     delete_embed_template,
     delete_frase_especial,
     delete_gif_url_by_id,
@@ -547,6 +551,11 @@ async def _auth_callback(request: web.Request) -> web.StreamResponse:
     _user_guilds_cache[user["id"]] = (time.monotonic() + _GUILDS_CACHE_TTL, manage)
     if session.pop("post_login_redirect", None) == "landing":
         raise web.HTTPFound(LANDING_URL)
+    pending_share = session.pop("pending_share", None)
+    if pending_share:
+        # Venía de un link /share/{id} sin sesión: retomar el flujo con el
+        # share a cuestas para que el selector lo propague al panel.
+        raise web.HTTPFound(f"/servers?share={pending_share}")
     raise web.HTTPFound("/servers")
 
 
@@ -1321,6 +1330,69 @@ async def _api_embeds_schedule(request: web.Request, guild_id: int) -> web.Respo
     return web.json_response({"id": new_id})
 
 
+# ---------------- Embeds compartidos por link ----------------
+
+
+def _valid_share_id(share_id: str) -> bool:
+    """Formato de los ids que emite generate_unique_share_id (alfanuméricos,
+    8+). El rango laxo evita que un id malformado llegue a la DB o a un
+    redirect."""
+    return share_id.isalnum() and 4 <= len(share_id) <= 32
+
+
+@guild_api
+async def _api_embeds_share(request: web.Request, guild_id: int) -> web.Response:
+    """Genera un link compartible con el contenido del editor. Mismo shape de
+    body que /embeds/send (embeds + send_options), misma validación."""
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "body inválido"}, status=400)
+    embeds, err = _extract_embeds(data)
+    if err:
+        return web.json_response({"error": err}, status=400)
+    if await count_shared_embeds_today(guild_id) >= share_links_daily_limit():
+        return web.json_response(
+            {"error": "límite diario de links compartidos alcanzado — intenta de nuevo mañana"},
+            status=429,
+        )
+    options = sanitize_send_options(data.get("send_options"))
+    payload = {"embeds": embeds}
+    if options:
+        payload["send_options"] = options
+    share_id, expires_at = await add_shared_embed(json.dumps(payload), guild_id)
+    return web.json_response(
+        {
+            "share_id": share_id,
+            "url": f"{PANEL_URL}/share/{share_id}",
+            "expires_at": expires_at,
+        }
+    )
+
+
+async def _api_embeds_share_get(request: web.Request) -> web.Response:
+    """Público y sin scope de guild: el payload se pide desde el panel de
+    cualquier servidor, incluso antes de haber elegido uno."""
+    share_id = request.match_info.get("share_id", "")
+    payload = await get_shared_embed(share_id) if _valid_share_id(share_id) else None
+    if payload is None:
+        return web.json_response({"error": "Este link ya expiró o no existe"}, status=404)
+    return web.json_response(json.loads(payload))
+
+
+async def _share_page(request: web.Request) -> web.StreamResponse:
+    """Link público /share/{id}: manda al selector de servidores con el share
+    a cuestas. Sin sesión, primero al login — pending_share viaja en la sesión
+    porque el roundtrip OAuth pierde el query string."""
+    share_id = request.match_info.get("share_id", "")
+    if not _valid_share_id(share_id):
+        raise web.HTTPNotFound()
+    session = await get_session(request)
+    if not session.get("user_id"):
+        session["pending_share"] = share_id
+        raise web.HTTPFound("/auth/login")
+    raise web.HTTPFound(f"/servers?share={share_id}")
+
+
 def _template_row_to_json(t: dict) -> dict:
     content_mode = t.get("content_mode") or "classic_embed"
     out = {
@@ -1815,6 +1887,8 @@ async def start_web_server(bot: commands.Bot) -> None:
 
         # Páginas del panel
         app.router.add_get("/dashboard", require_login(_dashboard))
+        app.router.add_get("/share/{share_id}", _share_page)
+        app.router.add_get("/api/embeds/share/{share_id}", _api_embeds_share_get)
         app.router.add_get("/servers", require_login(_servers_page))
         app.router.add_get("/server/{guild_id}", require_login(_server_page))
         app.router.add_get("/server/{guild_id}/{category}", require_login(_server_page))
@@ -1862,6 +1936,7 @@ async def start_web_server(bot: commands.Bot) -> None:
         )
         app.router.add_post(f"{base}/settings/gifs/verify", _api_server_gifs_verify)
         app.router.add_post(f"{base}/embeds/send", _api_embeds_send)
+        app.router.add_post(f"{base}/embeds/share", _api_embeds_share)
         app.router.add_post(f"{base}/embeds/schedule", _api_embeds_schedule)
         app.router.add_post(f"{base}/embeds/validate", _api_embeds_validate)
         app.router.add_post(f"{base}/embeds/upload", _api_embeds_upload)

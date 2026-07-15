@@ -15,6 +15,7 @@ from db import (
     list_gif_urls,
     list_image_urls,
     mark_guild_departed,
+    purge_expired_shared_embeds,
     purge_guild_data,
 )
 from help_view import HelpView, build_intro_embed
@@ -125,6 +126,12 @@ class General(commands.Cog):
     @tasks.loop(hours=24)
     async def guild_cleanup_task(self):
         try:
+            stale_shares = await purge_expired_shared_embeds()
+            if stale_shares:
+                log.info(
+                    "guild_cleanup: %d link(s) de embed compartido vencidos borrados",
+                    stale_shares,
+                )
             retention = env_int("GUILD_DATA_RETENTION_DAYS", 30)
             expired = await get_expired_departures(retention)
             if not expired:
