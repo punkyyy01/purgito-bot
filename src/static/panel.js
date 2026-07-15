@@ -1708,45 +1708,85 @@ function renderClassicEditor(box, channels, roles) {
 
   // --- fields dinámicos ---
   const fieldsBox = el('div', {});
+  // Estado abierto/cerrado de cada field entre re-renders (reorden, duplicar,
+  // borrar). Set de referencias a los objetos de s.fields — los splices mueven
+  // las mismas refs, así que sobrevive. Regla inicial: ≤3 fields todos
+  // abiertos, con más solo el primero (mismo criterio que accordionGroup).
+  const openFields = new Set(s.fields.length <= 3 ? s.fields : s.fields.slice(0, 1));
   const addFieldBtn = el('button', {
     class: 'btn btn-secondary btn-sm',
-    onclick: () => { s.fields.push({ name: '', value: '', inline: false }); renderFields(); updatePreview(); },
+    onclick: () => {
+      const f = { name: '', value: '', inline: false };
+      s.fields.push(f);
+      openFields.add(f);  // recién agregado nace abierto para escribir ya
+      renderFields();
+      updatePreview();
+    },
   }, '+ Agregar field');
 
   function renderFields() {
     fieldsBox.innerHTML = '';
     s.fields.forEach((f, i) => {
+      // Header: "Field N" o "Field N — {nombre|valor}" (patrón fieldNText de
+      // Discohook), actualizado en vivo mientras se escribe.
+      const headText = () => {
+        const t = (f.name || '').trim() || (f.value || '').trim();
+        return `Field ${i + 1}` + (t ? ` — ${t.length > 40 ? t.slice(0, 40) + '…' : t}` : '');
+      };
+      const label = el('span', { class: 'embed-field-label' }, headText());
+
       const name = el('input', { type: 'text', placeholder: 'Nombre', maxlength: String(EMBED_LIMITS.fieldName), value: f.name });
-      name.oninput = () => { f.name = name.value; updatePreview(); };
-      const value = el('input', { type: 'text', placeholder: 'Valor', maxlength: String(EMBED_LIMITS.fieldValue), value: f.value });
-      value.oninput = () => { f.value = value.value; updatePreview(); };
+      name.oninput = () => { f.name = name.value; label.textContent = headText(); updatePreview(); };
+      const value = el('textarea', { placeholder: 'Valor', maxlength: String(EMBED_LIMITS.fieldValue), rows: '2' });
+      value.value = f.value;
+      value.oninput = () => { f.value = value.value; label.textContent = headText(); updatePreview(); };
       const inline = el('input', { type: 'checkbox', checked: f.inline });
       inline.onchange = () => { f.inline = inline.checked; updatePreview(); };
+
       // Solo el handle es draggable: arrastrar desde los inputs seguiría
       // seleccionando texto normalmente. DnD nativo (mismo enfoque que
-      // Discohook) — no funciona en touch; ver nota del reporte.
+      // Discohook) — no funciona en touch; ahí el fallback son los ▲/▼.
       const handle = el('span', {
         class: 'field-drag-handle', draggable: 'true',
         title: 'Arrastra para reordenar', 'aria-label': 'Arrastra para reordenar',
       }, '⠿');
-      const row = el('div', { class: 'embed-field-row' },
-        handle, name, value,
-        el('label', { class: 'toggle' }, inline, 'inline'),
-        el('button', {
-          class: 'btn btn-danger btn-sm',
-          onclick: () => { s.fields.splice(i, 1); renderFields(); updatePreview(); },
-        }, '✗'));
+
+      // Acciones del header. preventDefault evita que el click pliegue el
+      // <details> (default de summary); el re-render repone visibilidad ▲/▼.
+      const action = (icon, title, hidden, fn) => hidden ? null : el('button', {
+        class: 'field-action' + (icon === '✗' ? ' danger' : ''), title, 'aria-label': title,
+        onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); renderFields(); updatePreview(); },
+      }, icon);
+      const moveTo = (to) => { s.fields.splice(i, 1); s.fields.splice(to, 0, f); };
+      const actions = el('span', { class: 'embed-field-actions' },
+        action('▲', 'Mover arriba', i === 0, () => moveTo(i - 1)),
+        action('▼', 'Mover abajo', i === s.fields.length - 1, () => moveTo(i + 1)),
+        action('⧉', 'Duplicar', s.fields.length >= EMBED_LIMITS.fields, () => {
+          const dup = { name: f.name, value: f.value, inline: f.inline };
+          s.fields.splice(i + 1, 0, dup);
+          openFields.add(dup);
+        }),
+        action('✗', 'Eliminar', false, () => { s.fields.splice(i, 1); openFields.delete(f); }));
+
+      const det = el('details', { class: 'embed-field', open: openFields.has(f) ? '' : null },
+        el('summary', { class: 'embed-field-head' }, handle, label, actions),
+        el('div', { class: 'embed-field-body' },
+          el('div', { class: 'embed-field-name-row' },
+            name, el('label', { class: 'toggle' }, inline, 'inline')),
+          value));
+      det.ontoggle = () => { if (det.open) openFields.add(f); else openFields.delete(f); };
+
       handle.ondragstart = (e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', String(i));
-        row.classList.add('dragging');
+        det.classList.add('dragging');
       };
-      handle.ondragend = () => row.classList.remove('dragging');
-      row.ondragover = (e) => { e.preventDefault(); row.classList.add('drag-over'); };
-      row.ondragleave = () => row.classList.remove('drag-over');
-      row.ondrop = (e) => {
+      handle.ondragend = () => det.classList.remove('dragging');
+      det.ondragover = (e) => { e.preventDefault(); det.classList.add('drag-over'); };
+      det.ondragleave = () => det.classList.remove('drag-over');
+      det.ondrop = (e) => {
         e.preventDefault();
-        row.classList.remove('drag-over');
+        det.classList.remove('drag-over');
         const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
         if (Number.isNaN(from) || from === i) return;
         const [moved] = s.fields.splice(from, 1);
@@ -1754,7 +1794,7 @@ function renderClassicEditor(box, channels, roles) {
         renderFields();
         updatePreview();
       };
-      fieldsBox.append(row);
+      fieldsBox.append(det);
     });
     addFieldBtn.disabled = s.fields.length >= EMBED_LIMITS.fields;
   }

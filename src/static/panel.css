@@ -746,17 +746,43 @@ h1 {
 }
 .color-hex-input.invalid { border-color: var(--danger); }
 .embed-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.embed-field-row {
-  display: grid;
-  grid-template-columns: auto 1fr 1fr auto auto;
-  gap: 8px;
+/* Cada field es su propio <details> colapsable (patrón EmbedFieldEditorSection
+   de Discohook): header con preview del contenido + acciones, cuerpo con los
+   inputs. */
+.embed-field { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; }
+.embed-field-head {
+  display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+.embed-field-head::-webkit-details-marker { display: none; }
+.embed-field-head::before { content: '▸'; display: inline-block; transition: transform var(--transition); color: var(--text-muted); }
+.embed-field[open] > .embed-field-head::before { transform: rotate(90deg); }
+.embed-field-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.embed-field-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.field-action {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+.field-action:hover { color: var(--text); }
+.field-action.danger:hover { color: var(--danger); }
+.embed-field-body { padding: 0 10px 10px; display: grid; gap: 8px; }
+.embed-field-name-row { display: flex; gap: 10px; align-items: center; }
+.embed-field-name-row input[type='text'] { flex: 1; min-width: 0; }
 .field-drag-handle { cursor: grab; color: var(--text-muted); padding: 0 6px; touch-action: none; }
 .field-drag-handle:active { cursor: grabbing; }
-.embed-field-row.dragging { opacity: 0.4; }
-.embed-field-row.drag-over { border-top: 2px solid var(--accent); }
+.embed-field.dragging { opacity: 0.4; }
+.embed-field.drag-over { border-top: 2px solid var(--accent); }
 
 /* Secciones colapsables del editor de embeds (accordionGroup en panel.js). */
 .embed-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
@@ -1076,8 +1102,8 @@ h1 {
 }
 @media (max-width: 768px) {
   .embed-two { grid-template-columns: 1fr; }
-  .embed-field-row { grid-template-columns: 1fr; }
-  /* DnD nativo no existe en touch: el handle solo confundiría. */
+  /* DnD nativo no existe en touch: el handle solo confundiría — los botones
+     ▲/▼ del header de cada field son la alternativa táctil. */
   .field-drag-handle { display: none; }
 }
 
