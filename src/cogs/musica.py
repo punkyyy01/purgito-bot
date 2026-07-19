@@ -76,10 +76,10 @@ class NowPlayingView(discord.ui.View):
             )
             return
         if player.voice_client.is_paused():
-            player.voice_client.resume()
+            player.resume()
             button.emoji = "⏸️"
         elif player.voice_client.is_playing():
-            player.voice_client.pause()
+            player.pause()
             button.emoji = "▶️"
         else:
             await interaction.response.send_message(
@@ -403,7 +403,7 @@ class Musica(commands.Cog):
                 ephemeral=True,
             )
             return
-        player.voice_client.pause()
+        player.pause()
         await interaction.response.send_message(
             embed=discord.Embed(
                 description="⏸️ Reproducción pausada.", color=EMBED_COLOR
@@ -426,7 +426,7 @@ class Musica(commands.Cog):
                 ephemeral=True,
             )
             return
-        player.voice_client.resume()
+        player.resume()
         await interaction.response.send_message(
             embed=discord.Embed(
                 description="▶️ Reproducción reanudada.", color=EMBED_COLOR

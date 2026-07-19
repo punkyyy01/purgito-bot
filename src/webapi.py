@@ -60,6 +60,7 @@ from db import (
     add_youtube_sub,
     count_gif_urls,
     count_shared_embeds_today,
+    get_gif_by_url,
     get_shared_embed,
     share_links_daily_limit,
     delete_embed_template,
@@ -320,7 +321,12 @@ async def _gif_add_impl(request: web.Request, guild_id: int) -> web.Response:
         return web.json_response({"error": "url inválida o no permitida"}, status=400)
     inserted = await save_gif_url(guild_id, url)
     total = await count_gif_urls(guild_id)
-    return web.json_response({"inserted": inserted, "total": total})
+    resp = {"inserted": inserted, "total": total}
+    if inserted:
+        gif = await get_gif_by_url(guild_id, url)
+        if gif:
+            resp["gif"] = gif
+    return web.json_response(resp)
 
 
 async def _gif_delete_impl(
@@ -564,7 +570,7 @@ async def _auth_logout(request: web.Request) -> web.StreamResponse:
     # Sin esto, un re-login del mismo user reutilizaría la lista de guilds del token anterior.
     _user_guilds_cache.pop(session.get("user_id"), None)
     session.invalidate()
-    raise web.HTTPFound("/auth/login")
+    raise web.HTTPFound(LANDING_URL)
 
 
 async def _auth_error(request: web.Request) -> web.Response:

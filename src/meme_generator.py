@@ -199,17 +199,13 @@ def render_meme(image_bytes: bytes, caption: str) -> bytes:
         else:
             y = img_h - total_h - margin
 
-        outline = max(2, font_size // 12)
+        stroke = max(2, font_size // 12)
 
         for line in lines:
             line_w = font.getlength(line)
             x = int((img_w - line_w) / 2)
-            for dx in range(-outline, outline + 1):
-                for dy in range(-outline, outline + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    draw.text((x + dx, y + dy), line, fill=(0, 0, 0), font=font)
-            draw.text((x, y), line, fill=(255, 255, 255), font=font)
+            draw.text((x, y), line, font=font, fill=(255, 255, 255),
+                      stroke_width=stroke, stroke_fill=(0, 0, 0))
             y += line_h
 
     draw_outlined_text(top_text, "top")

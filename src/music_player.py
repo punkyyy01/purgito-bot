@@ -529,15 +529,40 @@ class MusicPlayer:
         self.loop_mode: LoopMode = LoopMode.OFF
         self.text_channel: Optional[discord.abc.Messageable] = None
         self._play_start: float = 0.0
+        self._paused_total: float = 0.0
+        self._paused_at: Optional[float] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._prefetch: Optional[tuple[str, str]] = None
+        self._bg_tasks: set = set()
 
     def is_active(self) -> bool:
         return self.voice_client is not None and (
             self.voice_client.is_playing() or self.voice_client.is_paused()
         )
 
+    def pause(self) -> None:
+        vc = self.voice_client
+        if vc and vc.is_playing():
+            vc.pause()
+            if self._paused_at is None:
+                self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        vc = self.voice_client
+        if vc and vc.is_paused():
+            if self._paused_at is not None:
+                self._paused_total += time.monotonic() - self._paused_at
+                self._paused_at = None
+            vc.resume()
+
     def elapsed(self) -> int:
-        return int(time.monotonic() - self._play_start) if self._play_start else 0
+        if not self._play_start:
+            return 0
+        now = time.monotonic()
+        paused = self._paused_total
+        if self._paused_at is not None:
+            paused += now - self._paused_at
+        return int(now - self._play_start - paused)
 
     def _after(self, error: Optional[Exception]) -> None:
         if error:
@@ -570,11 +595,28 @@ class MusicPlayer:
         self.current = self.queue.pop(0)
         await self._play_current()
 
+    def _spawn_prefetch(self, song: SongInfo) -> None:
+        async def _run() -> None:
+            try:
+                url = await fetch_stream_url(song.webpage_url)
+            except Exception:
+                url = None
+            if url:
+                self._prefetch = (song.webpage_url, url)
+
+        task = asyncio.create_task(_run())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
     async def _play_current(self) -> None:
         if not self.voice_client or not self.voice_client.is_connected():
             return
 
-        stream_url = await fetch_stream_url(self.current.webpage_url)
+        prefetched = None
+        if self._prefetch and self._prefetch[0] == self.current.webpage_url:
+            prefetched = self._prefetch[1]
+        self._prefetch = None
+        stream_url = prefetched or await fetch_stream_url(self.current.webpage_url)
         if not stream_url:
             if self.text_channel:
                 try:
@@ -592,8 +634,13 @@ class MusicPlayer:
         pcm = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
         source = discord.PCMVolumeTransformer(pcm, volume=self.volume)
         self._play_start = time.monotonic()
+        self._paused_total = 0.0
+        self._paused_at = None
         self._loop = asyncio.get_running_loop()
         self.voice_client.play(source, after=self._after)
+
+        if self.queue:
+            self._spawn_prefetch(self.queue[0])
 
         if self.text_channel:
             try:
@@ -654,6 +701,7 @@ class MusicPlayer:
         self.queue.clear()
         self.current = None
         self._play_start = 0.0
+        self._prefetch = None
         if self.voice_client:
             if self.voice_client.is_playing() or self.voice_client.is_paused():
                 self.voice_client.stop()

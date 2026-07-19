@@ -669,7 +669,23 @@ $('add-form').addEventListener('submit', async (e) => {
       st.textContent = '✓ GIF summonado al vault (total: ' + data.total + ')';
       st.className   = 'ok';
       inp.value = '';
-      await loadGifs();
+      if (data.gif) {
+        const grid = $('grid');
+        const empty = grid.querySelector('.empty');
+        if (empty) grid.innerHTML = '';
+        pool.unshift(data.gif);
+        const card = mkCard(data.gif);
+        const firstCard = grid.querySelector('.card');
+        if (firstCard) grid.insertBefore(card, firstCard);
+        else grid.appendChild(card);
+        if (classifyGif(data.gif).type === 'link') cntLink++;
+        else cntPreview++;
+        updateStats();
+        setTotal(pool.length);
+        syncMore();
+      } else {
+        await loadGifs();
+      }
     } else {
       st.textContent = '⚠ Ese GIF ya habita en el vault';
       st.className   = 'warn';

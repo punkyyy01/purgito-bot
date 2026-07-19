@@ -559,6 +559,18 @@ async def save_gif_url(guild_id: int, url: str) -> bool:
     return inserted
 
 
+async def get_gif_by_url(guild_id: int, url: str) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT id, url, media_url FROM corpus_gifs WHERE guild_id=? AND url=?",
+        (guild_id, url),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "url": row[1], "media_url": row[2]}
+
+
 async def get_random_gif_candidates(guild_id: int, limit: int = 3) -> list[dict]:
     db = await get_db()
     async with db.execute(
